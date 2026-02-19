@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import os
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -25,10 +27,13 @@ def _pdf_bytes(page_count: int, *, encrypted: bool = False) -> bytes:
     return payload.getvalue()
 
 
-def test_upload_generate_and_download(tmp_path: Path) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
+def _extract_download_url(response_text: str) -> str:
+    match = re.search(r'href="(/download/[^"]+)"', response_text)
+    assert match is not None
+    return match.group(1)
 
+
+def _post_impose(client: TestClient, *, filename: str = "input.pdf") -> tuple[int, str]:
     response = client.post(
         "/impose",
         data={
@@ -36,18 +41,76 @@ def test_upload_generate_and_download(tmp_path: Path) -> None:
             "signature_length": "6",
             "flyleafs": "0",
         },
-        files={"file": ("input.pdf", _pdf_bytes(9), "application/pdf")},
+        files={"file": (filename, _pdf_bytes(9), "application/pdf")},
     )
+    return response.status_code, response.text
 
-    assert response.status_code == 200
-    assert "Imposition complete." in response.text
 
-    match = re.search(r'href="(/download/[^"]+)"', response.text)
-    assert match is not None
+def test_upload_generate_and_download(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
 
-    download_response = client.get(match.group(1))
+    status_code, response_text = _post_impose(client)
+
+    assert status_code == 200
+    assert "Imposition complete." in response_text
+
+    download_url = _extract_download_url(response_text)
+    assert re.fullmatch(r"/download/[a-f0-9]{32}/[^/]+", download_url)
+
+    download_response = client.get(download_url)
     assert download_response.status_code == 200
     assert download_response.headers["content-type"].startswith("application/pdf")
+
+
+def test_same_filename_uploads_get_unique_request_scoped_artifacts(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    first_status, first_text = _post_impose(client, filename="shared.pdf")
+    second_status, second_text = _post_impose(client, filename="shared.pdf")
+
+    assert first_status == 200
+    assert second_status == 200
+
+    first_download = _extract_download_url(first_text)
+    second_download = _extract_download_url(second_text)
+    assert first_download != second_download
+
+    assert client.get(first_download).status_code == 200
+    assert client.get(second_download).status_code == 200
+
+    generated_artifacts = list(tmp_path.glob("*/*.pdf"))
+    assert len(generated_artifacts) == 2
+
+
+def test_cleanup_removes_stale_generated_artifacts(tmp_path: Path) -> None:
+    stale_request_dir = tmp_path / ("a" * 32)
+    stale_request_dir.mkdir()
+    stale_request_file = stale_request_dir / "stale_imposed_duplex.pdf"
+    stale_request_file.write_bytes(b"stale")
+
+    stale_legacy_file = tmp_path / "legacy_imposed_duplex.pdf"
+    stale_legacy_file.write_bytes(b"stale")
+
+    fresh_marker_file = tmp_path / "fresh.marker"
+    fresh_marker_file.write_text("fresh", encoding="utf-8")
+
+    stale_timestamp = time.time() - 3600
+    os.utime(stale_request_dir, (stale_timestamp, stale_timestamp))
+    os.utime(stale_request_file, (stale_timestamp, stale_timestamp))
+    os.utime(stale_legacy_file, (stale_timestamp, stale_timestamp))
+
+    app = create_app(artifact_dir=tmp_path, artifact_retention_seconds=60)
+    client = TestClient(app)
+
+    status_code, response_text = _post_impose(client)
+    assert status_code == 200
+    assert "Imposition complete." in response_text
+
+    assert not stale_request_dir.exists()
+    assert not stale_legacy_file.exists()
+    assert fresh_marker_file.exists()
 
 
 def test_reject_non_pdf_upload(tmp_path: Path) -> None:

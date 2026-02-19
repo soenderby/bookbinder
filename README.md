@@ -25,4 +25,6 @@ pytest -m mvp_integration
 - Supported paper sizes: `A4`, `Letter`
 - Signature mode: standard fixed `sig_length` (in sheets)
 - Output: single aggregated duplex PDF
+- Generated artifacts are request-scoped under `generated/<request-id>/...`
+- Stale generated artifacts older than 24 hours are cleaned on each `/impose` request
 - Unsupported in MVP: encrypted input PDFs, non-folio layouts
