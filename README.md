@@ -5,7 +5,7 @@ Folio-only PDF imposition web app using FastAPI and `pypdf`.
 ## Run Locally
 
 ```bash
-python -m pip install -e .[dev]
+python -m pip install -e '.[dev]'
 uvicorn bookbinder.web.app:app --reload
 ```
 

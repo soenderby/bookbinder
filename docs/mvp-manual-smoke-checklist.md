@@ -4,7 +4,7 @@ Use this checklist after automated gates pass.
 
 ## Setup
 
-1. Install dependencies: `python -m pip install -e .[dev]`
+1. Install dependencies: `python -m pip install -e '.[dev]'`
 2. Start app: `uvicorn bookbinder.web.app:app --reload`
 3. Open `http://127.0.0.1:8000`
 
