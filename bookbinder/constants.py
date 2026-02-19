@@ -8,3 +8,4 @@ PAPER_SIZES: Final[dict[str, tuple[float, float]]] = {
 }
 
 DEFAULT_ARTIFACT_DIR: Final[str] = "generated"
+DEFAULT_ARTIFACT_RETENTION_SECONDS: Final[int] = 24 * 60 * 60

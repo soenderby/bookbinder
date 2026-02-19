@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import io
+import re
+import shutil
+import time
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -11,15 +15,60 @@ from fastapi.templating import Jinja2Templates
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
-from bookbinder.constants import DEFAULT_ARTIFACT_DIR, PAPER_SIZES
+from bookbinder.constants import (
+    DEFAULT_ARTIFACT_DIR,
+    DEFAULT_ARTIFACT_RETENTION_SECONDS,
+    PAPER_SIZES,
+)
 from bookbinder.imposition.core import build_ordered_pages, split_signatures
 from bookbinder.imposition.pdf_writer import (
     deterministic_output_filename,
     write_duplex_aggregated_pdf,
 )
 
+_REQUEST_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
-def create_app(artifact_dir: Path | None = None) -> FastAPI:
+
+def _cleanup_stale_artifacts(
+    artifact_dir: Path,
+    *,
+    retention_seconds: int,
+    now: float | None = None,
+) -> int:
+    if retention_seconds < 0:
+        return 0
+
+    cutoff = (time.time() if now is None else now) - retention_seconds
+    removed = 0
+    for child in artifact_dir.iterdir():
+        try:
+            is_stale = child.stat().st_mtime < cutoff
+        except FileNotFoundError:
+            continue
+
+        if not is_stale:
+            continue
+
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+        removed += 1
+
+    return removed
+
+
+def _validated_filename(filename: str) -> str:
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return safe_name
+
+
+def create_app(
+    artifact_dir: Path | None = None,
+    artifact_retention_seconds: int = DEFAULT_ARTIFACT_RETENTION_SECONDS,
+) -> FastAPI:
     app = FastAPI(title="Bookbinder", version="0.1.0")
 
     base_dir = Path(__file__).resolve().parent
@@ -31,6 +80,7 @@ def create_app(artifact_dir: Path | None = None) -> FastAPI:
     target_artifact_dir = artifact_dir or (Path.cwd() / DEFAULT_ARTIFACT_DIR)
     target_artifact_dir.mkdir(parents=True, exist_ok=True)
     app.state.artifact_dir = target_artifact_dir
+    app.state.artifact_retention_seconds = artifact_retention_seconds
     app.state.templates = templates
 
     def render_index(
@@ -149,8 +199,15 @@ def create_app(artifact_dir: Path | None = None) -> FastAPI:
         ordered_pages = build_ordered_pages(source_pages, flyleaf_sets=flyleafs)
         signatures = split_signatures(ordered_pages, sig_length_sheets=signature_length)
 
+        _cleanup_stale_artifacts(
+            app.state.artifact_dir,
+            retention_seconds=app.state.artifact_retention_seconds,
+        )
+
+        request_id = uuid4().hex
+        request_artifact_dir = app.state.artifact_dir / request_id
         output_name = deterministic_output_filename(source_name)
-        output_path = app.state.artifact_dir / output_name
+        output_path = request_artifact_dir / output_name
         artifact = write_duplex_aggregated_pdf(
             reader,
             signatures=signatures,
@@ -162,18 +219,27 @@ def create_app(artifact_dir: Path | None = None) -> FastAPI:
         result = {
             "status": "success",
             "message": "Imposition complete.",
-            "download_url": f"/download/{output_name}",
+            "download_url": f"/download/{request_id}/{output_name}",
             "output_filename": output_name,
             "output_pages": artifact.page_count,
         }
         return render_index(request, result=result, form_values=form_values)
 
-    @app.get("/download/{filename}")
-    def download(filename: str) -> FileResponse:
-        safe_name = Path(filename).name
-        if safe_name != filename:
-            raise HTTPException(status_code=400, detail="Invalid filename")
+    @app.get("/download/{request_id}/{filename}")
+    def download_request_artifact(request_id: str, filename: str) -> FileResponse:
+        if _REQUEST_ID_PATTERN.fullmatch(request_id) is None:
+            raise HTTPException(status_code=400, detail="Invalid request id")
 
+        safe_name = _validated_filename(filename)
+        file_path = app.state.artifact_dir / request_id / safe_name
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        return FileResponse(path=file_path, media_type="application/pdf", filename=safe_name)
+
+    @app.get("/download/{filename}")
+    def download_legacy_artifact(filename: str) -> FileResponse:
+        safe_name = _validated_filename(filename)
         file_path = app.state.artifact_dir / safe_name
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
