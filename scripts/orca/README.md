@@ -2,6 +2,14 @@
 
 This directory contains the Orca multi-agent orchestration scripts.
 
+## Prerequisites
+
+- `git` (worktree support)
+- `tmux` (agent sessions)
+- `bd` CLI (task queue and updates)
+- `jq` (ready queue JSON parsing)
+- `codex` CLI (default `AGENT_COMMAND`)
+
 ## Entrypoints
 
 - Preferred: `./bb orca <command> [args]`
@@ -23,6 +31,12 @@ This directory contains the Orca multi-agent orchestration scripts.
 - `status.sh`: displays sessions, worktrees, and recent activity
 - `stop.sh`: stops active agent sessions
 - `AGENT_PROMPT.md`: prompt template used by `agent-loop.sh`
+
+## Runtime knobs
+
+- `MAX_RUNS`: number of issue runs per loop (`0` means unbounded until queue empty)
+- `READY_MAX_ATTEMPTS`: retries for `bd ready --json` polling (default: `5`)
+- `READY_RETRY_SECONDS`: seconds between ready polling retries (default: `3`)
 
 ## TODO
 In no particular order:

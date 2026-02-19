@@ -4,20 +4,48 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 SESSION_PREFIX="${SESSION_PREFIX:-bb-agent}"
 
+safe_run() {
+  local context="$1"
+  shift
+  if "$@"; then
+    return 0
+  fi
+
+  echo "(${context} failed)" >&2
+  return 1
+}
+
 echo "== tmux sessions =="
-tmux ls 2>/dev/null | grep "^${SESSION_PREFIX}-" || echo "(none)"
+if command -v tmux >/dev/null 2>&1; then
+  tmux_sessions="$(tmux ls 2>/dev/null | grep "^${SESSION_PREFIX}-" || true)"
+  if [[ -n "${tmux_sessions}" ]]; then
+    printf '%s\n' "${tmux_sessions}"
+  else
+    echo "(none)"
+  fi
+else
+  echo "(tmux not installed)"
+fi
 
 echo
 echo "== worktrees =="
-git worktree list
+safe_run "git worktree list" git worktree list || true
 
 echo
 echo "== Recently closed beads"
-bd list --status closed --limit 10
+if command -v bd >/dev/null 2>&1; then
+  safe_run "bd list" bd list --status closed --limit 10 || true
+else
+  echo "(bd not installed)"
+fi
 
 echo
 echo "== beads ready =="
-bd ready --limit 10 || true
+if command -v bd >/dev/null 2>&1; then
+  safe_run "bd ready" bd ready --limit 10 || true
+else
+  echo "(bd not installed)"
+fi
 
 echo
 echo "== recent logs =="
