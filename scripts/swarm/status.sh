@@ -12,8 +12,12 @@ echo "== worktrees =="
 git worktree list
 
 echo
+echo "== Recently closed beads"
+bd list --status closed --limit 10
+
+echo
 echo "== beads ready =="
-bd ready --limit 20 || true
+bd ready --limit 10 || true
 
 echo
 echo "== recent logs =="
