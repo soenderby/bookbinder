@@ -32,6 +32,25 @@ echo "== worktrees =="
 safe_run "git worktree list" git worktree list || true
 
 echo
+echo "== currently claimed beads =="
+if command -v bd >/dev/null 2>&1; then
+  if claimed_beads_output="$(
+    bd list --status in_progress --sort updated --reverse --limit 20 2>&1
+  )"; then
+    if [[ -n "${claimed_beads_output}" ]]; then
+      printf '%s\n' "${claimed_beads_output}"
+    else
+      echo "(none)"
+    fi
+  else
+    printf '%s\n' "${claimed_beads_output}" >&2
+    echo "(bd list --status in_progress failed)" >&2
+  fi
+else
+  echo "(bd not installed)"
+fi
+
+echo
 echo "== Recently closed beads"
 if command -v bd >/dev/null 2>&1; then
   safe_run "bd list" bd list --status closed --limit 10 || true
