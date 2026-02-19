@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "notes": [
+    "Settings were provided by the repository owner on 2026-02-18.",
+    "Outputs and page counts were discovered from files currently in sample-pdfs/expected_output."
+  ],
+  "cases": [
+    {
+      "input": "Destruction_and_Creation_John_Boyd.pdf",
+      "input_pages": 9,
+      "settings": {
+        "paper_size": "A4",
+        "printer_type": "duplex",
+        "source_rotation": "none",
+        "duplex_rotate": false,
+        "page_layout": "folio",
+        "flyleafs": 1,
+        "signature_mode": "standardsig",
+        "signature_length": 6,
+        "custom_signature_config": null,
+        "style_modifications": "none"
+      },
+      "outputs": [
+        {
+          "file": "destruction_and_creation_output/destruction_and_creation_john_boyd_signature0_duplex.pdf",
+          "pages": 8
+        }
+      ]
+    },
+    {
+      "input": "Psychology_of_Intelligence_Analysis.pdf",
+      "input_pages": 214,
+      "settings": {
+        "paper_size": "A4",
+        "printer_type": "duplex",
+        "source_rotation": "none",
+        "duplex_rotate": false,
+        "page_layout": "folio",
+        "flyleafs": 1,
+        "signature_mode": "standardsig",
+        "signature_length": 6,
+        "custom_signature_config": null,
+        "style_modifications": "none"
+      },
+      "outputs": [
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature0_duplex.pdf",
+          "pages": 12
+        },
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature1_duplex.pdf",
+          "pages": 12
+        },
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature2_duplex.pdf",
+          "pages": 12
+        },
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature3_duplex.pdf",
+          "pages": 12
+        },
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature4_duplex.pdf",
+          "pages": 12
+        },
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature5_duplex.pdf",
+          "pages": 10
+        },
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature6_duplex.pdf",
+          "pages": 10
+        },
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature7_duplex.pdf",
+          "pages": 10
+        },
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature8_duplex.pdf",
+          "pages": 10
+        },
+        {
+          "file": "psychology_of_intelligence_analysis_output/psychology_of_intelligence_analysis_signature9_duplex.pdf",
+          "pages": 10
+        }
+      ]
+    }
+  ]
+}
