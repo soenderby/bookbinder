@@ -16,7 +16,7 @@ fi
 
 AGENT_NAME="${AGENT_NAME:-$(basename "${WORKTREE}")}"
 AGENT_SESSION_ID="${AGENT_SESSION_ID:-${AGENT_NAME}-$(date -u +%Y%m%dT%H%M%SZ)}"
-AGENT_MODEL="${AGENT_MODEL:-gpt-5}"
+AGENT_MODEL="${AGENT_MODEL:-gpt-5.3-codex}"
 AGENT_REASONING_LEVEL="${AGENT_REASONING_LEVEL:-}"
 if [[ -n "${AGENT_COMMAND:-}" ]]; then
   AGENT_COMMAND="${AGENT_COMMAND}"
@@ -54,6 +54,7 @@ fi
 runs_completed=0
 current_issue_id=""
 cleanup_in_progress=0
+EXPECTED_BRANCH=""
 
 mkdir -p "${ROOT}/agent-logs"
 LOGFILE=""
@@ -95,7 +96,7 @@ release_claim_if_needed() {
 
   local failure_note
   failure_note="Agent loop interruption in ${AGENT_NAME} at $(date -Iseconds). Reason: ${reason}. Returning issue to open for retry."
-  if bd update "${current_issue_id}" --status open --assignee "" --append-notes "${failure_note}" >/dev/null 2>&1; then
+  if update_issue_to_open_with_retry "${current_issue_id}" "${failure_note}" "${reason}"; then
     log "returned ${current_issue_id} to open (${reason})"
   else
     log "failed to return ${current_issue_id} to open (${reason}); manual intervention needed"
@@ -137,9 +138,93 @@ next_ready_issue_with_retry() {
   return 1
 }
 
-sync_with_remote() {
-  git pull --rebase --autostash >/dev/null 2>&1 || true
-  bd sync >/dev/null 2>&1 || true
+log_git_status_lines() {
+  while IFS= read -r status_line; do
+    log "git status: ${status_line}"
+  done < <(git status --short)
+}
+
+abort_rebase_if_needed() {
+  if [[ -d ".git/rebase-apply" || -d ".git/rebase-merge" ]]; then
+    if git rebase --abort >/dev/null 2>&1; then
+      log "aborted in-progress rebase after git pull failure"
+    else
+      log "failed to abort in-progress rebase after git pull failure"
+    fi
+  fi
+}
+
+require_clean_worktree_or_exit() {
+  local context="$1"
+  if [[ -n "$(git status --porcelain)" ]]; then
+    log "worktree is dirty during ${context}; refusing to continue"
+    log_git_status_lines
+    exit 1
+  fi
+}
+
+require_expected_branch_or_exit() {
+  local context="$1"
+  local current_branch
+
+  current_branch="$(git branch --show-current)"
+  if [[ "${current_branch}" == "${EXPECTED_BRANCH}" ]]; then
+    return
+  fi
+
+  log "branch drift during ${context}; expected ${EXPECTED_BRANCH}, found ${current_branch:-detached}"
+  if git checkout "${EXPECTED_BRANCH}" >/dev/null 2>&1; then
+    log "checked out expected branch ${EXPECTED_BRANCH}"
+    return
+  fi
+
+  log "failed to checkout expected branch ${EXPECTED_BRANCH}; stopping loop"
+  exit 1
+}
+
+guard_worktree_state_or_exit() {
+  local context="$1"
+  require_expected_branch_or_exit "${context}"
+  require_clean_worktree_or_exit "${context}"
+}
+
+update_issue_to_open_with_retry() {
+  local issue_id="$1"
+  local note="$2"
+  local reason="$3"
+  local attempts=1
+  local max_attempts=3
+
+  while [[ "${attempts}" -le "${max_attempts}" ]]; do
+    if bd update "${issue_id}" --status open --assignee "" --append-notes "${note}" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    log "failed to return ${issue_id} to open (${reason}); attempt ${attempts}/${max_attempts}"
+    attempts=$((attempts + 1))
+    sleep 2
+  done
+
+  return 1
+}
+
+sync_with_remote_or_exit() {
+  local context="$1"
+
+  guard_worktree_state_or_exit "${context}:pre-sync"
+
+  if ! git pull --rebase --autostash >/dev/null 2>&1; then
+    log "git pull --rebase --autostash failed during ${context}; stopping loop"
+    abort_rebase_if_needed
+    exit 1
+  fi
+
+  if ! bd sync >/dev/null 2>&1; then
+    log "bd sync failed during ${context}; stopping loop"
+    exit 1
+  fi
+
+  guard_worktree_state_or_exit "${context}:post-sync"
 }
 
 trap cleanup_on_exit EXIT
@@ -147,8 +232,15 @@ trap 'cleanup_on_signal INT; exit 130' INT
 trap 'cleanup_on_signal TERM; exit 143' TERM
 
 cd "${WORKTREE}"
+EXPECTED_BRANCH="${EXPECTED_BRANCH:-$(git branch --show-current)}"
+if [[ -z "${EXPECTED_BRANCH}" ]]; then
+  echo "Unable to determine expected branch for ${WORKTREE}" >&2
+  exit 1
+fi
+
 log "starting loop in ${WORKTREE}"
 log "session id: ${AGENT_SESSION_ID}"
+log "expected branch: ${EXPECTED_BRANCH}"
 if [[ "${MAX_RUNS}" -eq 0 ]]; then
   log "run mode: continuous until queue is empty"
 else
@@ -161,7 +253,7 @@ while true; do
     break
   fi
 
-  sync_with_remote
+  sync_with_remote_or_exit "iteration-start"
 
   if ! issue_id="$(next_ready_issue_with_retry)"; then
     log "ready queue polling failed after ${READY_MAX_ATTEMPTS} attempts; continuing loop after backoff"
@@ -195,11 +287,12 @@ while true; do
   log "running agent command for ${issue_id}"
   if bash -lc "${AGENT_COMMAND}" < "${tmp_prompt}" >>"${LOGFILE}" 2>&1; then
     log "agent command finished for ${issue_id}"
+    guard_worktree_state_or_exit "post-agent:${issue_id}"
     current_issue_id=""
   else
     log "agent command failed for ${issue_id}; returning issue to open"
     failure_note="Agent loop failure in ${AGENT_NAME} at $(date -Iseconds). Command: ${AGENT_COMMAND}. Returning issue to open for retry."
-    if bd update "${issue_id}" --status open --assignee "" --append-notes "${failure_note}" >/dev/null 2>&1; then
+    if update_issue_to_open_with_retry "${issue_id}" "${failure_note}" "agent-command-failure"; then
       log "returned ${issue_id} to open"
     else
       log "failed to return ${issue_id} to open; manual intervention needed"
@@ -209,7 +302,7 @@ while true; do
 
   rm -f "${tmp_prompt}"
 
-  sync_with_remote
+  sync_with_remote_or_exit "iteration-end"
 
   runs_completed=$((runs_completed + 1))
   if [[ "${MAX_RUNS}" -eq 0 ]]; then

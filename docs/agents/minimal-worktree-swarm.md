@@ -49,7 +49,7 @@ If an agent run fails after claiming an issue, the loop automatically moves that
 
 Environment variables:
 
-1. `AGENT_MODEL` (default: `gpt-5`)
+1. `AGENT_MODEL` (default: `gpt-5.3-codex`)
 2. `AGENT_COMMAND` (default uses `codex exec --dangerously-bypass-approvals-and-sandbox`)
 3. `AGENT_REASONING_LEVEL` (sets `model_reasoning_effort` for default codex command)
 4. `SESSION_PREFIX` (default: `bb-agent`)
