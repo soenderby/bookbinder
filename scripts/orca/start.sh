@@ -14,13 +14,33 @@ USAGE
 }
 
 COUNT=""
-ROOT="$(git rev-parse --show-toplevel)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SESSION_PREFIX="${SESSION_PREFIX:-bb-agent}"
 AGENT_MODEL="${AGENT_MODEL:-gpt-5.3-codex}"
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
-PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/orca/AGENT_PROMPT.md}"
 MAX_RUNS="${MAX_RUNS:-0}"
+
+check_prerequisites() {
+  local missing=()
+  local cmd
+  local agent_command_bin
+
+  for cmd in git tmux bd jq; do
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+      missing+=("${cmd}")
+    fi
+  done
+
+  agent_command_bin="${AGENT_COMMAND%% *}"
+  if [[ -n "${agent_command_bin}" ]] && ! command -v "${agent_command_bin}" >/dev/null 2>&1; then
+    missing+=("${agent_command_bin} (from AGENT_COMMAND)")
+  fi
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "[start] missing prerequisites: ${missing[*]}" >&2
+    exit 1
+  fi
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,6 +75,11 @@ done
 
 COUNT="${COUNT:-2}"
 
+check_prerequisites
+
+ROOT="$(git rev-parse --show-toplevel)"
+PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/orca/AGENT_PROMPT.md}"
+
 if ! [[ "${COUNT}" =~ ^[1-9][0-9]*$ ]]; then
   echo "[start] count must be a positive integer: ${COUNT}" >&2
   exit 1
@@ -77,6 +102,7 @@ echo "[start] run mode: ${mode_message}"
 
 for i in $(seq 1 "${COUNT}"); do
   session="${SESSION_PREFIX}-${i}"
+  session_id="${session}-$(date -u +%Y%m%dT%H%M%SZ)"
   worktree="${ROOT}/worktrees/agent-${i}"
 
   if tmux has-session -t "${session}" 2>/dev/null; then
@@ -85,9 +111,10 @@ for i in $(seq 1 "${COUNT}"); do
   fi
 
   echo "[start] launching ${session} in ${worktree}"
-  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q WORKTREE=%q AGENT_MODEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q %q" \
+  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q %q" \
     "${ROOT}" \
     "agent-${i}" \
+    "${session_id}" \
     "${worktree}" \
     "${AGENT_MODEL}" \
     "${AGENT_COMMAND}" \

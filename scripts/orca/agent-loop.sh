@@ -15,6 +15,7 @@ if ! git -C "${WORKTREE}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 AGENT_NAME="${AGENT_NAME:-$(basename "${WORKTREE}")}"
+AGENT_SESSION_ID="${AGENT_SESSION_ID:-${AGENT_NAME}-$(date -u +%Y%m%dT%H%M%SZ)}"
 AGENT_MODEL="${AGENT_MODEL:-gpt-5}"
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
 PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/orca/AGENT_PROMPT.md}"
@@ -42,7 +43,7 @@ current_issue_id=""
 cleanup_in_progress=0
 
 mkdir -p "${ROOT}/agent-logs"
-LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}.log"
+LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}.log"
 
 log() {
   printf '[%s] [%s] %s\n' "$(date -Iseconds)" "${AGENT_NAME}" "$*" | tee -a "${LOGFILE}"
@@ -104,6 +105,7 @@ trap 'cleanup_on_signal TERM; exit 143' TERM
 
 cd "${WORKTREE}"
 log "starting loop in ${WORKTREE}"
+log "session id: ${AGENT_SESSION_ID}"
 if [[ "${MAX_RUNS}" -eq 0 ]]; then
   log "run mode: continuous until queue is empty"
 else

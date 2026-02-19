@@ -42,7 +42,6 @@ This directory contains the Orca multi-agent orchestration scripts.
 In no particular order:
  - A/B testing prompts
  - Agent loop metrics in sqlite database
- - Split logs into a file per agent session
  - Figure out how to sync worktrees
  - Agent loop handoff
  - Sharing or storing lessons learned from run
