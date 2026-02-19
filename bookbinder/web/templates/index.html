@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bookbinder MVP</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <h1>Bookbinder MVP</h1>
+      <p class="subtitle">Folio-only PDF imposition</p>
+
+      <form class="panel" action="/impose" method="post" enctype="multipart/form-data">
+        <label for="file">Source PDF</label>
+        <input id="file" name="file" type="file" accept="application/pdf,.pdf" required />
+
+        <label for="paper_size">Paper size</label>
+        <select id="paper_size" name="paper_size">
+          {% for size in paper_sizes %}
+          <option value="{{ size }}" {{ "selected" if form.paper_size == size else "" }}>{{ size }}</option>
+          {% endfor %}
+        </select>
+
+        <label for="signature_length">Signature length (sheets)</label>
+        <input id="signature_length" name="signature_length" type="number" min="1" value="{{ form.signature_length }}" required />
+
+        <label for="flyleafs">Flyleaf sets</label>
+        <input id="flyleafs" name="flyleafs" type="number" min="0" value="{{ form.flyleafs }}" required />
+
+        <label class="checkbox" for="duplex_rotate">
+          <input id="duplex_rotate" name="duplex_rotate" type="checkbox" value="true" {{ "checked" if form.duplex_rotate else "" }} />
+          Duplex rotate
+        </label>
+
+        <button type="submit">Generate</button>
+      </form>
+
+      {% if result %}
+      <section class="panel result result-{{ result.status }}">
+        <h2>{{ result.status | capitalize }}</h2>
+        <p>{{ result.message }}</p>
+        {% if result.status == "success" %}
+        <p>Output pages: {{ result.output_pages }}</p>
+        <a href="{{ result.download_url }}" download>Download {{ result.output_filename }}</a>
+        {% endif %}
+      </section>
+      {% endif %}
+    </main>
+  </body>
+</html>
