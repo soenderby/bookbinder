@@ -23,3 +23,12 @@ This directory contains the Orca multi-agent orchestration scripts.
 - `status.sh`: displays sessions, worktrees, and recent activity
 - `stop.sh`: stops active agent sessions
 - `AGENT_PROMPT.md`: prompt template used by `agent-loop.sh`
+
+## TODO
+In no particular order:
+ - A/B testing prompts
+ - Agent loop metrics in sqlite database
+ - Split logs into a file per agent session
+ - Figure out how to sync worktrees
+ - Agent loop handoff
+ - Sharing or storing lessons learned from run
