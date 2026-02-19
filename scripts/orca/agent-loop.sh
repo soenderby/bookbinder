@@ -17,7 +17,15 @@ fi
 AGENT_NAME="${AGENT_NAME:-$(basename "${WORKTREE}")}"
 AGENT_SESSION_ID="${AGENT_SESSION_ID:-${AGENT_NAME}-$(date -u +%Y%m%dT%H%M%SZ)}"
 AGENT_MODEL="${AGENT_MODEL:-gpt-5}"
-AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
+AGENT_REASONING_LEVEL="${AGENT_REASONING_LEVEL:-}"
+if [[ -n "${AGENT_COMMAND:-}" ]]; then
+  AGENT_COMMAND="${AGENT_COMMAND}"
+else
+  AGENT_COMMAND="codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}"
+  if [[ -n "${AGENT_REASONING_LEVEL}" ]]; then
+    AGENT_COMMAND="${AGENT_COMMAND} -c model_reasoning_effort=${AGENT_REASONING_LEVEL}"
+  fi
+fi
 PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/orca/AGENT_PROMPT.md}"
 MAX_RUNS="${MAX_RUNS:-0}"
 READY_MAX_ATTEMPTS="${READY_MAX_ATTEMPTS:-5}"
@@ -35,6 +43,11 @@ fi
 
 if ! [[ "${READY_RETRY_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "READY_RETRY_SECONDS must be a positive integer: ${READY_RETRY_SECONDS}"
+  exit 1
+fi
+
+if [[ -n "${AGENT_REASONING_LEVEL}" && ! "${AGENT_REASONING_LEVEL}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "AGENT_REASONING_LEVEL must contain only letters, digits, dot, underscore, or dash: ${AGENT_REASONING_LEVEL}"
   exit 1
 fi
 
@@ -99,6 +112,11 @@ next_ready_issue_with_retry() {
   return 1
 }
 
+sync_with_remote() {
+  git pull --rebase --autostash >/dev/null 2>&1 || true
+  bd sync >/dev/null 2>&1 || true
+}
+
 trap cleanup_on_exit EXIT
 trap 'cleanup_on_signal INT; exit 130' INT
 trap 'cleanup_on_signal TERM; exit 143' TERM
@@ -118,8 +136,7 @@ while true; do
     break
   fi
 
-  git pull --rebase --autostash >/dev/null 2>&1 || true
-  bd sync >/dev/null 2>&1 || true
+  sync_with_remote
 
   if ! issue_id="$(next_ready_issue_with_retry)"; then
     log "ready queue polling failed after ${READY_MAX_ATTEMPTS} attempts; continuing loop after backoff"
@@ -166,8 +183,7 @@ while true; do
 
   rm -f "${tmp_prompt}"
 
-  git pull --rebase --autostash >/dev/null 2>&1 || true
-  bd sync >/dev/null 2>&1 || true
+  sync_with_remote
 
   runs_completed=$((runs_completed + 1))
   if [[ "${MAX_RUNS}" -eq 0 ]]; then

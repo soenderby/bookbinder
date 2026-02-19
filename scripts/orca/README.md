@@ -17,7 +17,7 @@ This directory contains the Orca multi-agent orchestration scripts.
 
 ## Commands
 
-- `start [count] [--runs N|--continuous]`
+- `start [count] [--runs N|--continuous] [--reasoning-level LEVEL]`
 - `stop`
 - `status`
 - `setup-worktrees [count]`
@@ -35,6 +35,7 @@ This directory contains the Orca multi-agent orchestration scripts.
 ## Runtime knobs
 
 - `MAX_RUNS`: number of issue runs per loop (`0` means unbounded until queue empty)
+- `AGENT_REASONING_LEVEL`: value passed as `model_reasoning_effort` for default codex command
 - `READY_MAX_ATTEMPTS`: retries for `bd ready --json` polling (default: `5`)
 - `READY_RETRY_SECONDS`: seconds between ready polling retries (default: `3`)
 

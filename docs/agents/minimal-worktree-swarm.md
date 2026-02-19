@@ -51,14 +51,18 @@ Environment variables:
 
 1. `AGENT_MODEL` (default: `gpt-5`)
 2. `AGENT_COMMAND` (default uses `codex exec --dangerously-bypass-approvals-and-sandbox`)
-3. `SESSION_PREFIX` (default: `bb-agent`)
-4. `PROMPT_TEMPLATE` (default: `scripts/orca/AGENT_PROMPT.md`)
-5. `MAX_RUNS` (default: `0`, where `0` means unbounded runs until queue empty)
+3. `AGENT_REASONING_LEVEL` (sets `model_reasoning_effort` for default codex command)
+4. `SESSION_PREFIX` (default: `bb-agent`)
+5. `PROMPT_TEMPLATE` (default: `scripts/orca/AGENT_PROMPT.md`)
+6. `MAX_RUNS` (default: `0`, where `0` means unbounded runs until queue empty)
 
 Example:
 
 ```bash
 AGENT_MODEL=gpt-5.1 SESSION_PREFIX=swarm ./bb orca start 3 --runs 10
+
+# Set reasoning effort for the default codex command
+AGENT_REASONING_LEVEL=high ./bb orca start 2 --continuous
 ```
 
 `start.sh` explicitly passes these values into each tmux session, so operator-selected values are consistently used by workers.

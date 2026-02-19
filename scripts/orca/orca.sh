@@ -10,7 +10,7 @@ Usage:
   ${USAGE_PREFIX} <command> [args]
 
 Commands:
-  start [count] [--runs N|--continuous]
+  start [count] [--runs N|--continuous] [--reasoning-level LEVEL]
   stop
   status
   setup-worktrees [count]

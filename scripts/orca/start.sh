@@ -4,12 +4,14 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  start.sh [count] [--runs N | --continuous]
+  start.sh [count] [--runs N | --continuous] [--reasoning-level LEVEL]
 
 Options:
   count         Number of worker sessions/worktrees to launch (default: 2)
   --runs N      Stop each agent loop after N completed issue runs
   --continuous  Keep each loop unbounded while ready work exists (default)
+  --reasoning-level LEVEL
+                Set `model_reasoning_effort` for default codex agent command
 USAGE
 }
 
@@ -17,6 +19,11 @@ COUNT=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SESSION_PREFIX="${SESSION_PREFIX:-bb-agent}"
 AGENT_MODEL="${AGENT_MODEL:-gpt-5.3-codex}"
+AGENT_REASONING_LEVEL="${AGENT_REASONING_LEVEL:-}"
+AGENT_COMMAND_WAS_SET=0
+if [[ -n "${AGENT_COMMAND+x}" ]]; then
+  AGENT_COMMAND_WAS_SET=1
+fi
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
 MAX_RUNS="${MAX_RUNS:-0}"
 
@@ -56,6 +63,14 @@ while [[ $# -gt 0 ]]; do
       MAX_RUNS=0
       shift
       ;;
+    --reasoning-level)
+      if [[ $# -lt 2 ]]; then
+        echo "[start] --reasoning-level requires an argument" >&2
+        exit 1
+      fi
+      AGENT_REASONING_LEVEL="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -90,6 +105,24 @@ if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+if [[ -n "${AGENT_REASONING_LEVEL}" && ! "${AGENT_REASONING_LEVEL}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "[start] reasoning level must contain only letters, digits, dot, underscore, or dash: ${AGENT_REASONING_LEVEL}" >&2
+  exit 1
+fi
+
+if [[ -n "${AGENT_REASONING_LEVEL}" ]]; then
+  if [[ "${AGENT_COMMAND_WAS_SET}" -eq 1 ]]; then
+    echo "[start] AGENT_COMMAND override detected; --reasoning-level will not modify AGENT_COMMAND" >&2
+  else
+    AGENT_COMMAND="${AGENT_COMMAND} -c model_reasoning_effort=${AGENT_REASONING_LEVEL}"
+  fi
+fi
+
+if [[ ! -f "${PROMPT_TEMPLATE}" ]]; then
+  echo "[start] missing prompt template: ${PROMPT_TEMPLATE}" >&2
+  exit 1
+fi
+
 if [[ "${MAX_RUNS}" -eq 0 ]]; then
   mode_message="continuous until queue is empty"
 else
@@ -111,12 +144,13 @@ for i in $(seq 1 "${COUNT}"); do
   fi
 
   echo "[start] launching ${session} in ${worktree}"
-  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q %q" \
+  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_REASONING_LEVEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q %q" \
     "${ROOT}" \
     "agent-${i}" \
     "${session_id}" \
     "${worktree}" \
     "${AGENT_MODEL}" \
+    "${AGENT_REASONING_LEVEL}" \
     "${AGENT_COMMAND}" \
     "${PROMPT_TEMPLATE}" \
     "${MAX_RUNS}" \

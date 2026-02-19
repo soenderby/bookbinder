@@ -10,7 +10,7 @@ Usage:
   ./bb orca <command> [args]
 
 Orca commands:
-  start [count] [--runs N|--continuous]
+  start [count] [--runs N|--continuous] [--reasoning-level LEVEL]
                          Start tmux-backed agent loops (default count: 2,
                          default mode: --continuous, and loops stop when
                          no ready tasks remain)
@@ -23,6 +23,7 @@ Examples:
   ./bb orca setup-worktrees 2
   ./bb orca start 2
   ./bb orca start 2 --runs 5
+  ./bb orca start 2 --reasoning-level high
   ./bb orca start --continuous
   ./bb orca status
   ./bb orca stop

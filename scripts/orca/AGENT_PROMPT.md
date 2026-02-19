@@ -3,7 +3,7 @@ You are __AGENT_NAME__, running in persistent loop mode.
 Repository worktree: __WORKTREE__
 Claimed issue: __ISSUE_ID__
 
-Execute exactly one issue in this run, then exit.
+Execute exactly one issue in this run, then return control to the outer loop.
 
 Required sequence:
 1. Read `AGENTS.md`.
@@ -21,5 +21,5 @@ Required sequence:
     - `git push -u origin $(git branch --show-current)`
 
 Constraints:
-- Do not pick a different issue in this run.
+- Do not pick a different issue in this run; the loop will provide the next issue in a later run.
 - If blocked, keep status `in_progress` and append clear notes to the issue with next steps.
