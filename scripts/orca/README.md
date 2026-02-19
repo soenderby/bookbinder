@@ -32,3 +32,4 @@ In no particular order:
  - Figure out how to sync worktrees
  - Agent loop handoff
  - Sharing or storing lessons learned from run
+ - Streamline loop prompt (likely tied to A/B testing)
