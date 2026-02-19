@@ -10,7 +10,10 @@ Usage:
   ./bb orca <command> [args]
 
 Orca commands:
-  start [count]          Start tmux-backed agent loops (default count: 2)
+  start [count] [--runs N|--continuous]
+                         Start tmux-backed agent loops (default count: 2,
+                         default mode: --continuous, and loops stop when
+                         no ready tasks remain)
   stop                   Stop running agent loop sessions
   status                 Show swarm/session/worktree status
   setup-worktrees [count]
@@ -19,6 +22,8 @@ Orca commands:
 Examples:
   ./bb orca setup-worktrees 2
   ./bb orca start 2
+  ./bb orca start 2 --runs 5
+  ./bb orca start --continuous
   ./bb orca status
   ./bb orca stop
 USAGE
@@ -30,7 +35,7 @@ Usage:
   ./bb orca <command> [args]
 
 Commands:
-  start [count]
+  start [count] [--runs N|--continuous]
   stop
   status
   setup-worktrees [count]

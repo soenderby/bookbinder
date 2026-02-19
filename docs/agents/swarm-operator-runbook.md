@@ -4,13 +4,13 @@ This guide is for a human operator running the persistent multi-worktree agent s
 
 ## 1. Purpose
 
-Use the swarm to continuously pick and execute unblocked beads tasks in parallel.
+Use the swarm to drain ready unblocked beads tasks in parallel, or run bounded batches.
 
 Each loop:
 1. reads ready work from beads
 2. claims exactly one issue atomically
 3. runs one autonomous agent pass for that issue
-4. repeats forever
+4. continues while work exists and exits when no ready tasks remain (or run limit is reached)
 
 ## 2. Prerequisites
 
@@ -38,7 +38,7 @@ From repo root:
 ./bb orca setup-worktrees 2
 
 # Start the loops in tmux sessions
-./bb orca start 2
+./bb orca start 2 --continuous
 
 # Inspect status
 ./bb orca status
@@ -58,13 +58,21 @@ git pull --rebase
 bd sync
 
 # Start or resume loops
-./bb orca start 2
+./bb orca start 2 --continuous
 
 # Verify health
 ./bb orca status
 ```
 
 If sessions already exist, `./bb orca start` leaves them running.
+
+To run a bounded batch and stop automatically:
+
+```bash
+./bb orca start 2 --runs 5
+```
+
+`--runs` applies per agent session (`--runs 5` with 2 agents allows up to 10 issue runs total).
 
 ## 5. Live Operations
 
@@ -103,7 +111,7 @@ git worktree list
 To run 3 agents instead of 2:
 
 ```bash
-./bb orca start 3
+./bb orca start 3 --continuous
 ./bb orca status
 ```
 
@@ -111,7 +119,7 @@ To reduce active loops, stop all and restart with the desired count:
 
 ```bash
 ./bb orca stop
-./bb orca start 2
+./bb orca start 2 --continuous
 ```
 
 Worktrees remain persistent unless explicitly removed.
@@ -136,7 +144,7 @@ If loops wedge or misbehave:
 
 ```bash
 ./bb orca stop
-./bb orca start 2
+./bb orca start 2 --continuous
 ```
 
 If a specific agent keeps failing:
@@ -147,9 +155,9 @@ If a specific agent keeps failing:
 
 ## 9. Common Failures and Fixes
 
-1. `no ready beads` repeated in logs:
-- This is normal when queue is empty.
-- Create or un-block tasks in beads.
+1. `no ready beads; exiting loop` in logs:
+- This is normal when the queue is empty.
+- Start the swarm again after creating or un-blocking tasks in beads.
 
 2. `could not claim <id>` in logs:
 - Normal race condition between agents.
@@ -184,7 +192,7 @@ git push -u origin $(git branch --show-current)
 ```bash
 # setup/start/stop/status
 ./bb orca setup-worktrees 2
-./bb orca start 2
+./bb orca start 2 --continuous
 ./bb orca stop
 ./bb orca status
 

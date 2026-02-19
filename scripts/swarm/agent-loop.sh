@@ -18,7 +18,14 @@ AGENT_NAME="${AGENT_NAME:-$(basename "${WORKTREE}")}"
 AGENT_MODEL="${AGENT_MODEL:-gpt-5}"
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
 PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/swarm/AGENT_PROMPT.md}"
-POLL_SECONDS="${POLL_SECONDS:-20}"
+MAX_RUNS="${MAX_RUNS:-0}"
+
+if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
+  echo "MAX_RUNS must be a non-negative integer (0 means unbounded mode): ${MAX_RUNS}"
+  exit 1
+fi
+
+runs_completed=0
 
 mkdir -p "${ROOT}/agent-logs"
 LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}.log"
@@ -29,17 +36,26 @@ log() {
 
 cd "${WORKTREE}"
 log "starting loop in ${WORKTREE}"
+if [[ "${MAX_RUNS}" -eq 0 ]]; then
+  log "run mode: continuous until queue is empty"
+else
+  log "run mode: stop after ${MAX_RUNS} runs"
+fi
 
 while true; do
+  if [[ "${MAX_RUNS}" -gt 0 && "${runs_completed}" -ge "${MAX_RUNS}" ]]; then
+    log "max runs reached (${runs_completed}/${MAX_RUNS}); exiting loop"
+    break
+  fi
+
   git pull --rebase --autostash >/dev/null 2>&1 || true
   bd sync >/dev/null 2>&1 || true
 
   issue_id="$(bd ready --json | jq -r '.[0].id // empty')"
 
   if [[ -z "${issue_id}" ]]; then
-    log "no ready beads; sleeping ${POLL_SECONDS}s"
-    sleep "${POLL_SECONDS}"
-    continue
+    log "no ready beads; exiting loop"
+    break
   fi
 
   if ! bd update "${issue_id}" --claim >/dev/null 2>&1; then
@@ -75,5 +91,15 @@ while true; do
 
   git pull --rebase --autostash >/dev/null 2>&1 || true
   bd sync >/dev/null 2>&1 || true
+
+  runs_completed=$((runs_completed + 1))
+  if [[ "${MAX_RUNS}" -eq 0 ]]; then
+    log "completed run ${runs_completed}"
+  else
+    log "completed run ${runs_completed}/${MAX_RUNS}"
+  fi
+
   sleep 2
 done
+
+log "loop stopped"

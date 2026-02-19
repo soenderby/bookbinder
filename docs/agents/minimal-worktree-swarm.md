@@ -1,6 +1,6 @@
 # Minimal Worktree Swarm Setup
 
-This is a minimal starting point for running multiple persistent agent loops in parallel.
+This is a minimal starting point for running multiple agent loops in parallel.
 
 ## What This Setup Provides
 
@@ -19,8 +19,11 @@ From repo root:
 # 1) Create two persistent worktrees
 ./bb orca setup-worktrees 2
 
-# 2) Start two agent loops
-./bb orca start 2
+# 2) Start two continuous agent loops
+./bb orca start 2 --continuous
+
+# Optional: run a bounded batch (each loop exits after 5 issue runs)
+./bb orca start 2 --runs 5
 
 # 3) Check swarm status
 ./bb orca status
@@ -36,7 +39,7 @@ Each loop:
 2. asks for unblocked work (`bd ready --json`)
 3. attempts atomic claim (`bd update <id> --claim`)
 4. runs one autonomous agent pass for that issue
-5. repeats forever
+5. continues while work exists; exits when queue is empty (or run limit is reached)
 
 Only one loop can claim a given issue, which prevents duplicate work.
 
@@ -48,14 +51,14 @@ Environment variables:
 
 1. `AGENT_MODEL` (default: `gpt-5`)
 2. `AGENT_COMMAND` (default uses `codex exec --dangerously-bypass-approvals-and-sandbox`)
-3. `POLL_SECONDS` (default: `20`)
-4. `SESSION_PREFIX` (default: `bb-agent`)
-5. `PROMPT_TEMPLATE` (default: `scripts/swarm/AGENT_PROMPT.md`)
+3. `SESSION_PREFIX` (default: `bb-agent`)
+4. `PROMPT_TEMPLATE` (default: `scripts/swarm/AGENT_PROMPT.md`)
+5. `MAX_RUNS` (default: `0`, where `0` means unbounded runs until queue empty)
 
 Example:
 
 ```bash
-AGENT_MODEL=gpt-5.1 SESSION_PREFIX=swarm ./bb orca start 3
+AGENT_MODEL=gpt-5.1 SESSION_PREFIX=swarm ./bb orca start 3 --runs 10
 ```
 
 `start.sh` explicitly passes these values into each tmux session, so operator-selected values are consistently used by workers.
