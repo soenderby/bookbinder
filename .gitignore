@@ -1,2 +1,4 @@
 worktrees/
 agent-logs/
+# bd worktree
+worktrees/agent-1/
