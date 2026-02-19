@@ -29,19 +29,6 @@ Examples:
 USAGE
 }
 
-orca_usage() {
-  cat <<'USAGE'
-Usage:
-  ./bb orca <command> [args]
-
-Commands:
-  start [count] [--runs N|--continuous]
-  stop
-  status
-  setup-worktrees [count]
-USAGE
-}
-
 if [[ $# -lt 1 ]]; then
   usage
   exit 1
@@ -52,33 +39,7 @@ shift
 
 case "${command}" in
   orca)
-    subcommand="${1:-}"
-    if [[ $# -gt 0 ]]; then
-      shift
-    fi
-
-    case "${subcommand}" in
-      start)
-        exec "${ORCA_DIR}/start.sh" "$@"
-        ;;
-      stop)
-        exec "${ORCA_DIR}/stop.sh" "$@"
-        ;;
-      status)
-        exec "${ORCA_DIR}/status.sh" "$@"
-        ;;
-      setup-worktrees|setup)
-        exec "${ORCA_DIR}/setup-worktrees.sh" "$@"
-        ;;
-      help|-h|--help|"")
-        orca_usage
-        ;;
-      *)
-        echo "Unknown orca command: ${subcommand}" >&2
-        orca_usage >&2
-        exit 1
-        ;;
-    esac
+    exec env ORCA_USAGE_PREFIX="./bb orca" "${ORCA_DIR}/orca.sh" "$@"
     ;;
   help|-h|--help)
     usage
