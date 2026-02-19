@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ORCA_DIR="${ROOT_DIR}/scripts/swarm"
+ORCA_DIR="${ROOT_DIR}/scripts/orca"
 
 usage() {
   cat <<'USAGE'

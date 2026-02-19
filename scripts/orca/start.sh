@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SESSION_PREFIX="${SESSION_PREFIX:-bb-agent}"
 AGENT_MODEL="${AGENT_MODEL:-gpt-5.3-codex}"
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
-PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/swarm/AGENT_PROMPT.md}"
+PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/orca/AGENT_PROMPT.md}"
 MAX_RUNS="${MAX_RUNS:-0}"
 
 while [[ $# -gt 0 ]]; do

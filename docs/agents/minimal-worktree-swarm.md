@@ -9,7 +9,7 @@ This is a minimal starting point for running multiple agent loops in parallel.
 3. Beads-based coordination (`bd ready` + atomic `bd update --claim`)
 4. Basic operational scripts (setup/start/stop/status)
 
-Scripts are in `scripts/swarm/`, with `./bb orca` as the preferred entrypoint.
+Scripts are in `scripts/orca/`, with `./bb orca` as the preferred entrypoint.
 
 ## Quick Start
 
@@ -52,7 +52,7 @@ Environment variables:
 1. `AGENT_MODEL` (default: `gpt-5`)
 2. `AGENT_COMMAND` (default uses `codex exec --dangerously-bypass-approvals-and-sandbox`)
 3. `SESSION_PREFIX` (default: `bb-agent`)
-4. `PROMPT_TEMPLATE` (default: `scripts/swarm/AGENT_PROMPT.md`)
+4. `PROMPT_TEMPLATE` (default: `scripts/orca/AGENT_PROMPT.md`)
 5. `MAX_RUNS` (default: `0`, where `0` means unbounded runs until queue empty)
 
 Example:

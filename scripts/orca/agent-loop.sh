@@ -17,7 +17,7 @@ fi
 AGENT_NAME="${AGENT_NAME:-$(basename "${WORKTREE}")}"
 AGENT_MODEL="${AGENT_MODEL:-gpt-5}"
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
-PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/swarm/AGENT_PROMPT.md}"
+PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/orca/AGENT_PROMPT.md}"
 MAX_RUNS="${MAX_RUNS:-0}"
 
 if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
