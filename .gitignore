@@ -2,3 +2,8 @@ worktrees/
 agent-logs/
 # bd worktree
 worktrees/agent-1/
+.pytest_cache/
+generated/
+*.egg-info/
+__pycache__/
+*.pyc
