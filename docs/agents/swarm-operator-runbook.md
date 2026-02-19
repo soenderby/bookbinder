@@ -35,13 +35,13 @@ From repo root:
 
 ```bash
 # Create persistent worktrees for 2 agents
-./scripts/swarm/setup-worktrees.sh 2
+./bb orca setup-worktrees 2
 
 # Start the loops in tmux sessions
-./scripts/swarm/start.sh 2
+./bb orca start 2
 
 # Inspect status
-./scripts/swarm/status.sh
+./bb orca status
 ```
 
 Expected tmux session names:
@@ -58,13 +58,13 @@ git pull --rebase
 bd sync
 
 # Start or resume loops
-./scripts/swarm/start.sh 2
+./bb orca start 2
 
 # Verify health
-./scripts/swarm/status.sh
+./bb orca status
 ```
 
-If sessions already exist, `start.sh` leaves them running.
+If sessions already exist, `./bb orca start` leaves them running.
 
 ## 5. Live Operations
 
@@ -103,15 +103,15 @@ git worktree list
 To run 3 agents instead of 2:
 
 ```bash
-./scripts/swarm/start.sh 3
-./scripts/swarm/status.sh
+./bb orca start 3
+./bb orca status
 ```
 
 To reduce active loops, stop all and restart with the desired count:
 
 ```bash
-./scripts/swarm/stop.sh
-./scripts/swarm/start.sh 2
+./bb orca stop
+./bb orca start 2
 ```
 
 Worktrees remain persistent unless explicitly removed.
@@ -121,8 +121,8 @@ Worktrees remain persistent unless explicitly removed.
 For controlled shutdown:
 
 ```bash
-./scripts/swarm/stop.sh
-./scripts/swarm/status.sh
+./bb orca stop
+./bb orca status
 ```
 
 Before ending the day, verify no required manual intervention remains:
@@ -135,8 +135,8 @@ Before ending the day, verify no required manual intervention remains:
 If loops wedge or misbehave:
 
 ```bash
-./scripts/swarm/stop.sh
-./scripts/swarm/start.sh 2
+./bb orca stop
+./bb orca start 2
 ```
 
 If a specific agent keeps failing:
@@ -183,10 +183,10 @@ git push -u origin $(git branch --show-current)
 
 ```bash
 # setup/start/stop/status
-./scripts/swarm/setup-worktrees.sh 2
-./scripts/swarm/start.sh 2
-./scripts/swarm/stop.sh
-./scripts/swarm/status.sh
+./bb orca setup-worktrees 2
+./bb orca start 2
+./bb orca stop
+./bb orca status
 
 # tmux
 tmux ls

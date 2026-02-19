@@ -9,7 +9,7 @@ This is a minimal starting point for running multiple persistent agent loops in 
 3. Beads-based coordination (`bd ready` + atomic `bd update --claim`)
 4. Basic operational scripts (setup/start/stop/status)
 
-Scripts are in `scripts/swarm/`.
+Scripts are in `scripts/swarm/`, with `./bb orca` as the preferred entrypoint.
 
 ## Quick Start
 
@@ -17,16 +17,16 @@ From repo root:
 
 ```bash
 # 1) Create two persistent worktrees
-./scripts/swarm/setup-worktrees.sh 2
+./bb orca setup-worktrees 2
 
 # 2) Start two agent loops
-./scripts/swarm/start.sh 2
+./bb orca start 2
 
 # 3) Check swarm status
-./scripts/swarm/status.sh
+./bb orca status
 
 # 4) Stop all loops
-./scripts/swarm/stop.sh
+./bb orca stop
 ```
 
 ## How Loop Coordination Works
@@ -55,7 +55,7 @@ Environment variables:
 Example:
 
 ```bash
-AGENT_MODEL=gpt-5.1 SESSION_PREFIX=swarm ./scripts/swarm/start.sh 3
+AGENT_MODEL=gpt-5.1 SESSION_PREFIX=swarm ./bb orca start 3
 ```
 
 `start.sh` explicitly passes these values into each tmux session, so operator-selected values are consistently used by workers.
