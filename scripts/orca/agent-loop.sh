@@ -56,10 +56,35 @@ current_issue_id=""
 cleanup_in_progress=0
 
 mkdir -p "${ROOT}/agent-logs"
-LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}.log"
+LOGFILE=""
 
 log() {
-  printf '[%s] [%s] %s\n' "$(date -Iseconds)" "${AGENT_NAME}" "$*" | tee -a "${LOGFILE}"
+  local line
+  line="$(printf '[%s] [%s] %s\n' "$(date -Iseconds)" "${AGENT_NAME}" "$*")"
+  if [[ -n "${LOGFILE}" ]]; then
+    printf '%s\n' "${line}" | tee -a "${LOGFILE}"
+  else
+    printf '%s\n' "${line}" >&2
+  fi
+}
+
+sanitize_for_filename() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+start_run_logfile() {
+  local issue_id="$1"
+  local run_number run_timestamp safe_issue_id
+
+  run_number=$((runs_completed + 1))
+  run_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  safe_issue_id="$(sanitize_for_filename "${issue_id}")"
+  LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}-run-${run_number}-${safe_issue_id}-${run_timestamp}.log"
+  : > "${LOGFILE}"
+
+  log "starting run ${run_number} for ${issue_id}"
+  log "session id: ${AGENT_SESSION_ID}"
+  log "worktree: ${WORKTREE}"
 }
 
 release_claim_if_needed() {
@@ -157,6 +182,7 @@ while true; do
 
   log "claimed ${issue_id}"
   current_issue_id="${issue_id}"
+  start_run_logfile "${issue_id}"
 
   prompt_text="$(cat "${PROMPT_TEMPLATE}")"
   prompt_text="${prompt_text//__AGENT_NAME__/${AGENT_NAME}}"
@@ -192,6 +218,7 @@ while true; do
     log "completed run ${runs_completed}/${MAX_RUNS}"
   fi
 
+  LOGFILE=""
   sleep 2
 done
 
