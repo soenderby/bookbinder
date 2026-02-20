@@ -46,6 +46,7 @@ bd --version
 tmux -V
 jq --version
 flock --version
+docker --version
 codex --version
 ```
 
@@ -54,6 +55,7 @@ Also ensure:
 1. you are authenticated in agent tooling (`codex login` if needed)
 2. repo has push access to `origin`
 3. queue has actionable work (`bd ready`)
+4. Dolt server mode is configured for beads (Orca start/stop manages the local container lifecycle)
 
 ## Core Workflow
 
@@ -69,6 +71,8 @@ Also ensure:
 ./bb orca start 2 --continuous
 ```
 
+`orca start` now also starts (or creates) the local Dolt SQL server container (`bookbinder-dolt` by default) for beads server mode.
+
 Bounded mode:
 
 ```bash
@@ -83,11 +87,15 @@ ls -lt agent-logs
 tail -n 10 agent-logs/metrics.jsonl
 ```
 
+`orca status` includes a Dolt database section with mode, server config, container state, and `bd` connectivity check.
+
 ### 4) Stop
 
 ```bash
 ./bb orca stop
 ```
+
+`orca stop` stops running Orca sessions and then stops the Dolt SQL server container.
 
 ## What the Loop Does vs What Agents Do
 

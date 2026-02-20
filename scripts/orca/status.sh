@@ -8,6 +8,9 @@ ORCA_STATUS_STALE_SECONDS="${ORCA_STATUS_STALE_SECONDS:-900}"
 ORCA_STATUS_CLAIMED_LIMIT="${ORCA_STATUS_CLAIMED_LIMIT:-20}"
 ORCA_STATUS_CLOSED_LIMIT="${ORCA_STATUS_CLOSED_LIMIT:-10}"
 ORCA_STATUS_RECENT_METRIC_LIMIT="${ORCA_STATUS_RECENT_METRIC_LIMIT:-10}"
+DOLT_CONTAINER_NAME="${DOLT_CONTAINER_NAME:-bookbinder-dolt}"
+DOLT_EXPECT_HOST="${DOLT_EXPECT_HOST:-localhost}"
+DOLT_EXPECT_PORT="${DOLT_EXPECT_PORT:-3307}"
 FIELD_SEP=$'\x1f'
 
 safe_run() {
@@ -153,6 +156,76 @@ add_alert() {
 
   ALERTS+=("${message}")
 }
+
+dolt_mode="unknown"
+dolt_database="unknown"
+dolt_host_cfg="unknown"
+dolt_port_cfg="unknown"
+dolt_user_cfg="unknown"
+dolt_container_state="unknown"
+dolt_container_status_line=""
+dolt_server_check="unknown"
+dolt_server_error=""
+
+if [[ -f "${ROOT}/.beads/metadata.json" ]]; then
+  if command -v jq >/dev/null 2>&1; then
+    dolt_mode="$(jq -r '.dolt_mode // empty' "${ROOT}/.beads/metadata.json" 2>/dev/null || true)"
+    dolt_database="$(jq -r '.dolt_database // empty' "${ROOT}/.beads/metadata.json" 2>/dev/null || true)"
+    dolt_host_cfg="$(jq -r '.dolt_server_host // empty' "${ROOT}/.beads/metadata.json" 2>/dev/null || true)"
+    dolt_port_cfg="$(jq -r '.dolt_server_port // empty' "${ROOT}/.beads/metadata.json" 2>/dev/null || true)"
+    dolt_user_cfg="$(jq -r '.dolt_server_user // empty' "${ROOT}/.beads/metadata.json" 2>/dev/null || true)"
+  else
+    dolt_mode="$(grep -Eo '"dolt_mode"[[:space:]]*:[[:space:]]*"[^"]+"' "${ROOT}/.beads/metadata.json" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+    dolt_database="$(grep -Eo '"dolt_database"[[:space:]]*:[[:space:]]*"[^"]+"' "${ROOT}/.beads/metadata.json" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+    dolt_host_cfg="$(grep -Eo '"dolt_server_host"[[:space:]]*:[[:space:]]*"[^"]+"' "${ROOT}/.beads/metadata.json" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+    dolt_port_cfg="$(grep -Eo '"dolt_server_port"[[:space:]]*:[[:space:]]*[0-9]+' "${ROOT}/.beads/metadata.json" | sed -E 's/.*: *([0-9]+)/\1/' || true)"
+    dolt_user_cfg="$(grep -Eo '"dolt_server_user"[[:space:]]*:[[:space:]]*"[^"]+"' "${ROOT}/.beads/metadata.json" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+  fi
+fi
+
+dolt_mode="${dolt_mode:-unknown}"
+dolt_database="${dolt_database:-unknown}"
+dolt_host_cfg="${dolt_host_cfg:-unknown}"
+dolt_port_cfg="${dolt_port_cfg:-unknown}"
+dolt_user_cfg="${dolt_user_cfg:-unknown}"
+
+if command -v docker >/dev/null 2>&1; then
+  docker_ps_names_output=""
+  if docker_ps_names_output="$(docker ps -a --filter "name=^${DOLT_CONTAINER_NAME}$" --format '{{.Names}}' 2>&1)"; then
+    container_name="${docker_ps_names_output}"
+    if [[ -n "${container_name}" ]]; then
+      if docker inspect -f '{{.State.Running}}' "${DOLT_CONTAINER_NAME}" 2>/dev/null | grep -q '^true$'; then
+        dolt_container_state="running"
+      else
+        dolt_container_state="stopped"
+      fi
+      dolt_container_status_line="$(docker ps -a --filter "name=^${DOLT_CONTAINER_NAME}$" --format '{{.Status}}' 2>/dev/null | head -n 1 || true)"
+    else
+      dolt_container_state="missing"
+    fi
+  else
+    dolt_container_state="docker-inaccessible"
+    dolt_container_status_line="$(printf '%s\n' "${docker_ps_names_output}" | head -n 1)"
+  fi
+else
+  dolt_container_state="docker-unavailable"
+fi
+
+if [[ "${dolt_mode}" == "server" ]]; then
+  bd_dolt_show_output=""
+  if command -v bd >/dev/null 2>&1; then
+    if bd_dolt_show_output="$(bd dolt show 2>&1)"; then
+      dolt_server_check="ok"
+    else
+      dolt_server_check="failed"
+      dolt_server_error="$(printf '%s\n' "${bd_dolt_show_output}" | head -n 1)"
+    fi
+  else
+    dolt_server_check="bd-unavailable"
+  fi
+else
+  dolt_server_check="not-server-mode"
+fi
 
 tmux_available=0
 tmux_sessions=""
@@ -314,6 +387,15 @@ if [[ "${main_dirty_count}" -gt 0 ]]; then
   add_alert "Primary repo has ${main_dirty_count} uncommitted path(s)."
 fi
 
+if [[ "${dolt_mode}" == "server" ]]; then
+  if [[ "${dolt_container_state}" != "running" ]]; then
+    add_alert "Dolt server container ${DOLT_CONTAINER_NAME} is ${dolt_container_state}."
+  fi
+  if [[ "${dolt_server_check}" == "failed" ]]; then
+    add_alert "Beads server-mode connectivity check failed (${dolt_server_error})."
+  fi
+fi
+
 if [[ "${metrics_summary_available}" -eq 1 ]]; then
   last_age_seconds=""
   if last_age_seconds="$(timestamp_to_epoch "${last_timestamp}")"; then
@@ -357,6 +439,26 @@ else
   for alert in "${ALERTS[@]}"; do
     echo "- ${alert}"
   done
+fi
+
+echo
+echo "== dolt database =="
+echo "mode: ${dolt_mode}"
+echo "database: ${dolt_database}"
+if [[ "${dolt_mode}" == "server" ]]; then
+  echo "server config: host=${dolt_host_cfg:-${DOLT_EXPECT_HOST}} port=${dolt_port_cfg:-${DOLT_EXPECT_PORT}} user=${dolt_user_cfg}"
+  echo "docker container (${DOLT_CONTAINER_NAME}): ${dolt_container_state}${dolt_container_status_line:+ (${dolt_container_status_line})}"
+  if [[ "${dolt_server_check}" == "ok" ]]; then
+    echo "bd connectivity: OK"
+  elif [[ "${dolt_server_check}" == "failed" ]]; then
+    echo "bd connectivity: FAILED (${dolt_server_error})"
+  elif [[ "${dolt_server_check}" == "bd-unavailable" ]]; then
+    echo "bd connectivity: bd not installed"
+  else
+    echo "bd connectivity: ${dolt_server_check}"
+  fi
+else
+  echo "server config: n/a (mode=${dolt_mode})"
 fi
 
 echo

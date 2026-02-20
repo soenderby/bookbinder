@@ -31,6 +31,55 @@ ORCA_TIMING_METRICS="${ORCA_TIMING_METRICS:-1}"
 ORCA_COMPACT_SUMMARY="${ORCA_COMPACT_SUMMARY:-1}"
 ORCA_LOCK_SCOPE="${ORCA_LOCK_SCOPE:-merge}"
 ORCA_LOCK_TIMEOUT_SECONDS="${ORCA_LOCK_TIMEOUT_SECONDS:-120}"
+DOLT_CONTAINER_NAME="${DOLT_CONTAINER_NAME:-bookbinder-dolt}"
+DOLT_IMAGE="${DOLT_IMAGE:-dolthub/dolt:latest}"
+DOLT_BIND_HOST="${DOLT_BIND_HOST:-127.0.0.1}"
+DOLT_BIND_PORT="${DOLT_BIND_PORT:-3307}"
+DOLT_SERVER_PORT="${DOLT_SERVER_PORT:-3306}"
+
+ensure_dolt_server() {
+  local dolt_data_dir
+  local exists
+  local is_running
+
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[start] missing prerequisite: docker (required for Dolt server mode)" >&2
+    exit 1
+  fi
+
+  dolt_data_dir="${DOLT_DATA_DIR:-${ROOT}/.beads/dolt}"
+  if [[ ! -d "${dolt_data_dir}" ]]; then
+    echo "[start] missing Dolt data directory: ${dolt_data_dir}" >&2
+    exit 1
+  fi
+
+  exists="$(docker ps -a --filter "name=^${DOLT_CONTAINER_NAME}$" --format '{{.Names}}')"
+  if [[ -n "${exists}" ]]; then
+    is_running="$(docker inspect -f '{{.State.Running}}' "${DOLT_CONTAINER_NAME}" 2>/dev/null || true)"
+    if [[ "${is_running}" == "true" ]]; then
+      echo "[start] Dolt server container already running: ${DOLT_CONTAINER_NAME}"
+    else
+      echo "[start] starting Dolt server container: ${DOLT_CONTAINER_NAME}"
+      docker start "${DOLT_CONTAINER_NAME}" >/dev/null
+    fi
+  else
+    echo "[start] creating Dolt server container: ${DOLT_CONTAINER_NAME}"
+    docker run -d \
+      --name "${DOLT_CONTAINER_NAME}" \
+      -p "${DOLT_BIND_HOST}:${DOLT_BIND_PORT}:${DOLT_SERVER_PORT}" \
+      -v "${dolt_data_dir}:/var/lib/dolt" \
+      "${DOLT_IMAGE}" \
+      sql-server \
+      --host 0.0.0.0 \
+      --port "${DOLT_SERVER_PORT}" \
+      --data-dir /var/lib/dolt >/dev/null
+  fi
+
+  docker exec "${DOLT_CONTAINER_NAME}" dolt sql -q \
+    "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY ''; \
+     GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; \
+     FLUSH PRIVILEGES;" >/dev/null
+}
 
 check_prerequisites() {
   local missing=()
@@ -160,6 +209,7 @@ else
 fi
 
 echo "[start] run mode: ${mode_message}"
+ensure_dolt_server
 
 "${SCRIPT_DIR}/setup-worktrees.sh" "${COUNT}"
 

@@ -50,3 +50,13 @@ sync-branch: "beads-sync"
 # - linear.api-key
 # - github.org
 # - github.repo
+
+dolt.host: localhost
+
+dolt.mode: "server"
+
+dolt.database: "beads"
+
+dolt.port: 3307
+
+dolt.user: "root"

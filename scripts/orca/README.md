@@ -46,12 +46,12 @@ In no particular order:
 Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per agent:
 
 1. `setup-worktrees.sh` ensures `worktrees/agent-N` and bootstrap branch `swarm/agent-N/bootstrap` exist.
-2. `start.sh` launches one tmux session per agent and injects runtime env.
+2. `start.sh` launches one tmux session per agent, injects runtime env, and ensures the Dolt SQL server container is running for beads server mode.
 3. `agent-loop.sh` runs one agent pass per iteration, creates a unique per-run branch, writes per-run logs/metrics, and parses the agent summary JSON.
 4. `AGENT_PROMPT.md` defines the agent contract for issue lifecycle, merge, discovery, and summary output.
 5. `with-lock.sh` provides a shared lock primitive for agent-owned merge/push critical sections.
-6. `status.sh` provides health and observability snapshots.
-7. `stop.sh` terminates active sessions.
+6. `status.sh` provides health and observability snapshots, including Dolt database checks.
+7. `stop.sh` terminates active sessions and stops the Dolt SQL server container.
 
 ## File Roles
 
@@ -62,7 +62,7 @@ Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per ag
 - `with-lock.sh`: scoped lock wrapper for commands that must serialize shared git integration operations
 - `check-closed-deps-merged.sh`: guard that verifies closed blocking dependencies for an issue are represented on integration history before claim
 - `status.sh`: displays sessions, worktrees, queue snapshots, logs, and metrics
-- `stop.sh`: stops active agent sessions
+- `stop.sh`: stops active agent sessions and Dolt SQL server container
 - `AGENT_PROMPT.md`: agent instruction contract used by `agent-loop.sh`
 - `OPERATOR_GUIDE.md`: human operator playbook and design rationale
 
@@ -155,6 +155,8 @@ Behavior:
 3. idempotent start for existing sessions
 4. invokes `setup-worktrees.sh` before launching sessions
 5. injects runtime knobs into each session
+6. ensures Dolt SQL server container is running (`bookbinder-dolt` by default)
+7. ensures SQL auth includes `root@'%'` for local TCP client compatibility
 
 ### `agent-loop.sh`
 
@@ -178,12 +180,13 @@ Signal handling:
 ### `status.sh`
 
 1. prints an `orca health` summary (sessions, agent worktrees, primary repo dirty count, metrics rollup)
-2. emits explicit alerts for high-signal conditions (no sessions, stale metrics, non-completed latest run)
-3. prints per-agent latest activity from `metrics.jsonl` (result, issue, age, duration, tokens, loop action)
-4. prints recent attention events (non-`completed` and non-`no_work` runs)
-5. prints tmux sessions and git worktrees
-6. prints queue snapshots (`in_progress`, `closed`) plus `bd status`
-7. prints latest metrics rows with agent and relative age
+2. prints Dolt database status (mode, server config, docker container state, bd connectivity)
+3. emits explicit alerts for high-signal conditions (no sessions, stale metrics, non-completed latest run, Dolt server down/failed)
+4. prints per-agent latest activity from `metrics.jsonl` (result, issue, age, duration, tokens, loop action)
+5. prints recent attention events (non-`completed` and non-`no_work` runs)
+6. prints tmux sessions and git worktrees
+7. prints queue snapshots (`in_progress`, `closed`) plus `bd status`
+8. prints latest metrics rows with agent and relative age
 
 Tuning knobs:
 
@@ -251,3 +254,9 @@ Primary repo and lock helper are injected to agents as:
 - `ORCA_LOCK_TIMEOUT_SECONDS`: lock timeout seconds (default `120`)
 - `ORCA_PRIMARY_REPO`: primary repository path used for lock-guarded merge/push operations (default repo root)
 - `ORCA_WITH_LOCK_PATH`: absolute path to lock helper passed to agents (default `<repo-root>/scripts/orca/with-lock.sh`)
+- `DOLT_CONTAINER_NAME`: Dolt SQL server container name (default `bookbinder-dolt`)
+- `DOLT_IMAGE`: Dolt container image (default `dolthub/dolt:latest`)
+- `DOLT_BIND_HOST`: host interface for container port bind (default `127.0.0.1`)
+- `DOLT_BIND_PORT`: host port for Dolt SQL server (default `3307`)
+- `DOLT_SERVER_PORT`: Dolt SQL server port inside container (default `3306`)
+- `DOLT_DATA_DIR`: host path mounted to Dolt data dir (default `<repo-root>/.beads/dolt`)
