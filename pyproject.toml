@@ -31,4 +31,6 @@ testpaths = ["tests"]
 markers = [
   "mvp_unit: Unit-level MVP logic checks",
   "mvp_integration: Integration-level MVP flow checks",
+  "polished_unit: Unit-level polished feature checks",
+  "polished_integration: Integration-level polished feature checks",
 ]
