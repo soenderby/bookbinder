@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -29,3 +32,27 @@ def test_imported_package_resolves_to_active_checkout() -> None:
 def test_create_app_import_resolves_to_active_checkout() -> None:
     source_path = Path(create_app.__code__.co_filename).resolve()
     assert ROOT in source_path.parents
+
+
+def test_editable_install_smoke_with_generated_dir(tmp_path: Path) -> None:
+    generated_dir = ROOT / "generated"
+    generated_dir.mkdir(exist_ok=True)
+
+    venv_dir = tmp_path / "editable-smoke-venv"
+    subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True, cwd=ROOT)
+
+    venv_python = venv_dir / "bin" / "python"
+    if os.name == "nt":
+        venv_python = venv_dir / "Scripts" / "python.exe"
+
+    env = os.environ.copy()
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    env["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
+    install = subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "--no-deps", "-e", str(ROOT)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert install.returncode == 0, install.stderr

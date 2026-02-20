@@ -21,6 +21,8 @@ pytest -m mvp_unit
 pytest -m mvp_integration
 ```
 
+Packaging smoke coverage for editable installs with a top-level `generated/` directory runs in `tests/mvp_unit/test_packaging.py` as part of `pytest -m mvp_unit`.
+
 ## MVP Notes
 
 - Supported paper sizes: `A4`, `Letter`
