@@ -76,6 +76,11 @@ For agent-owned integration flows, wrap merge/push critical sections in `with-lo
     set -euo pipefail
     repo="${ORCA_PRIMARY_REPO}"
     src_branch="$(git branch --show-current)"
+    if ! git -C "$repo" diff --quiet || ! git -C "$repo" diff --cached --quiet; then
+      echo "[merge-precheck] primary repo has uncommitted changes; aborting before merge" >&2
+      git -C "$repo" status --short >&2
+      exit 1
+    fi
     git -C "$repo" fetch origin main "$src_branch"
     git -C "$repo" checkout main
     git -C "$repo" pull --ff-only origin main
@@ -91,6 +96,7 @@ Notes:
 3. non-default scopes use `<git-common-dir>/orca-global-<scope>.lock`
 4. keep all shared-target write steps in one lock invocation
 5. use `set -euo pipefail` in lock-guarded merge scripts to fail fast
+6. run a pre-merge dirty-check on `ORCA_PRIMARY_REPO` and print `git status --short` before aborting
 
 ## Run Summary JSON Contract
 

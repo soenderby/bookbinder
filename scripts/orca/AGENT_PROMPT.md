@@ -84,6 +84,11 @@ Use this pattern for shared-target writes:
     set -euo pipefail
     repo="${ORCA_PRIMARY_REPO}"
     src_branch="$(git branch --show-current)"
+    if ! git -C "$repo" diff --quiet || ! git -C "$repo" diff --cached --quiet; then
+      echo "[merge-precheck] primary repo has uncommitted changes; aborting before merge" >&2
+      git -C "$repo" status --short >&2
+      exit 1
+    fi
     git -C "$repo" fetch origin main "$src_branch"
     git -C "$repo" checkout main
     git -C "$repo" pull --ff-only origin main
