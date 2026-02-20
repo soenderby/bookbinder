@@ -47,6 +47,7 @@ def _default_options() -> ImpositionOptions:
         duplex_rotate=False,
         custom_width_mm="",
         custom_height_mm="",
+        scaling_mode="proportional",
     )
     assert error is None
     return options
@@ -137,6 +138,7 @@ def test_upload_generate_with_custom_dimensions(tmp_path: Path) -> None:
         duplex_rotate=False,
         custom_width_mm="210",
         custom_height_mm="297",
+        scaling_mode="proportional",
     )
     assert error is None
 
@@ -179,6 +181,8 @@ def test_index_form_contains_required_mvp_controls(tmp_path: Path) -> None:
     assert 'name="file"' in html
     assert 'id="paper_size"' in html
     assert 'name="paper_size"' in html
+    assert 'id="scaling_mode"' in html
+    assert 'name="scaling_mode"' in html
     assert 'id="signature_length"' in html
     assert 'name="signature_length"' in html
     assert 'id="custom_width_mm"' in html
@@ -517,10 +521,25 @@ def test_parse_form_input_rejects_invalid_paper_size() -> None:
         duplex_rotate=False,
         custom_width_mm="",
         custom_height_mm="",
+        scaling_mode="proportional",
     )
     assert form_values["paper_size"] == "Unknown"
     assert error is not None
     assert "Invalid paper size." in error
+
+
+def test_parse_form_input_rejects_invalid_scaling_mode() -> None:
+    _, form_values, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=6,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="zoom",
+    )
+    assert form_values["scaling_mode"] == "zoom"
+    assert error == "Invalid scaling mode. Choose proportional, stretch, or original."
 
 
 def test_parse_form_input_requires_numeric_custom_dimensions() -> None:
@@ -531,6 +550,7 @@ def test_parse_form_input_requires_numeric_custom_dimensions() -> None:
         duplex_rotate=False,
         custom_width_mm="abc",
         custom_height_mm="210",
+        scaling_mode="proportional",
     )
     assert error == "Custom paper dimensions must be numeric values in millimeters."
 
@@ -543,6 +563,7 @@ def test_parse_form_input_rejects_non_positive_custom_dimensions() -> None:
         duplex_rotate=False,
         custom_width_mm="0",
         custom_height_mm="-1",
+        scaling_mode="proportional",
     )
     assert error == "Custom paper dimensions must be greater than 0 mm."
 
@@ -555,6 +576,7 @@ def test_parse_form_input_accepts_valid_custom_dimensions() -> None:
         duplex_rotate=False,
         custom_width_mm="210",
         custom_height_mm="297",
+        scaling_mode="proportional",
     )
     assert error is None
     assert form_values["paper_size"] == "Custom"

@@ -24,6 +24,7 @@ from bookbinder.constants import (
 )
 from bookbinder.imposition.core import build_ordered_pages, split_signatures
 from bookbinder.imposition.pdf_writer import (
+    _SCALING_MODES,
     deterministic_preview_filename,
     deterministic_output_filename,
     write_first_sheet_preview,
@@ -48,6 +49,7 @@ class ImpositionOptions:
     duplex_rotate: bool
     custom_width_points: float | None
     custom_height_points: float | None
+    scaling_mode: str
 
 
 def _log_event(level: int, event_name: str, **event_fields: Any) -> None:
@@ -105,6 +107,7 @@ def _parse_form_input(
     duplex_rotate: bool,
     custom_width_mm: str,
     custom_height_mm: str,
+    scaling_mode: str,
 ) -> tuple[ImpositionOptions, dict[str, Any], str | None]:
     normalized_paper_size = paper_size.strip()
     width_mm_value = custom_width_mm.strip()
@@ -117,6 +120,7 @@ def _parse_form_input(
         duplex_rotate=duplex_rotate,
         custom_width_points=None,
         custom_height_points=None,
+        scaling_mode=scaling_mode,
     )
     form_values: dict[str, Any] = {
         "paper_size": options.paper_size,
@@ -125,6 +129,7 @@ def _parse_form_input(
         "duplex_rotate": options.duplex_rotate,
         "custom_width_mm": width_mm_value,
         "custom_height_mm": height_mm_value,
+        "scaling_mode": options.scaling_mode,
     }
 
     allowed_sizes = set(PAPER_SIZES)
@@ -132,6 +137,8 @@ def _parse_form_input(
     if options.paper_size not in allowed_sizes:
         valid_sizes = ", ".join(sorted(allowed_sizes))
         return options, form_values, f"Invalid paper size. Choose one of: {valid_sizes}."
+    if options.scaling_mode not in _SCALING_MODES:
+        return options, form_values, "Invalid scaling mode. Choose proportional, stretch, or original."
 
     if options.paper_size == _CUSTOM_PAPER_SIZE:
         try:
@@ -150,6 +157,7 @@ def _parse_form_input(
             duplex_rotate=options.duplex_rotate,
             custom_width_points=width_mm * _POINTS_PER_MM,
             custom_height_points=height_mm * _POINTS_PER_MM,
+            scaling_mode=options.scaling_mode,
         )
 
     return options, form_values, None
@@ -224,6 +232,7 @@ def _impose_payload(
             paper_size=options.paper_size,
             duplex_rotate=options.duplex_rotate,
             custom_dimensions=custom_dimensions,
+            scaling_mode=options.scaling_mode,
         )
         artifact = write_duplex_aggregated_pdf(
             reader,
@@ -232,6 +241,7 @@ def _impose_payload(
             paper_size=options.paper_size,
             duplex_rotate=options.duplex_rotate,
             custom_dimensions=custom_dimensions,
+            scaling_mode=options.scaling_mode,
         )
     except ValueError as exc:
         _log_event(
@@ -370,6 +380,7 @@ def create_app(
             "duplex_rotate": False,
             "custom_width_mm": "",
             "custom_height_mm": "",
+            "scaling_mode": "proportional",
         }
         if form_values:
             defaults.update(form_values)
@@ -380,6 +391,7 @@ def create_app(
             context={
                 "result": result,
                 "paper_sizes": sorted(PAPER_SIZES.keys()) + [_CUSTOM_PAPER_SIZE],
+                "scaling_modes": list(_SCALING_MODES),
                 "form": defaults,
             },
             status_code=status_code,
@@ -404,6 +416,7 @@ def create_app(
         duplex_rotate: bool = Form(False),
         custom_width_mm: str = Form(""),
         custom_height_mm: str = Form(""),
+        scaling_mode: str = Form("proportional"),
     ) -> HTMLResponse:
         job_id = uuid4().hex
         _log_event(
@@ -434,6 +447,7 @@ def create_app(
             duplex_rotate=duplex_rotate,
             custom_width_mm=custom_width_mm,
             custom_height_mm=custom_height_mm,
+            scaling_mode=scaling_mode,
         )
         if form_error is not None:
             _log_event(logging.WARNING, "impose.request.form_validation_failed", job_id=job_id, error=form_error)
