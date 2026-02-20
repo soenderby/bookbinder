@@ -68,13 +68,16 @@ Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per ag
 For agent-owned integration flows, wrap merge/push critical sections in `with-lock.sh` so only one writer updates shared targets at a time.
 
 ```bash
-scripts/orca/with-lock.sh --scope merge --timeout 120 -- \
+"${ORCA_WITH_LOCK_PATH}" --scope merge --timeout 120 -- \
   bash -lc '
-    git fetch origin main
-    git checkout main
-    git pull --ff-only origin main
-    git merge --no-ff "$(git branch --show-current)"
-    git push origin main
+    set -euo pipefail
+    repo="${ORCA_PRIMARY_REPO}"
+    src_branch="$(git branch --show-current)"
+    git -C "$repo" fetch origin main "$src_branch"
+    git -C "$repo" checkout main
+    git -C "$repo" pull --ff-only origin main
+    git -C "$repo" merge --no-ff "$src_branch"
+    git -C "$repo" push origin main
   '
 ```
 
@@ -84,6 +87,7 @@ Notes:
 2. default lock file for `merge` scope is `<git-common-dir>/orca-global.lock`
 3. non-default scopes use `<git-common-dir>/orca-global-<scope>.lock`
 4. keep all shared-target write steps in one lock invocation
+5. use `set -euo pipefail` in lock-guarded merge scripts to fail fast
 
 ## Run Summary JSON Contract
 
@@ -106,7 +110,7 @@ Agents must write a JSON object to `ORCA_RUN_SUMMARY_PATH` (also provided in pro
 Each iteration:
 
 1. creates run artifacts (`*.log`, `*-summary.json`, optional `*-summary.md`)
-2. renders `AGENT_PROMPT.md` placeholders (agent/worktree/summary/discovery paths)
+2. renders `AGENT_PROMPT.md` placeholders (agent/worktree/summary/discovery/primary-repo/lock-helper paths)
 3. executes agent command once
 4. parses summary JSON when present
 5. appends metrics row to `agent-logs/metrics.jsonl`
@@ -146,6 +150,8 @@ Input/env validation:
 4. `ORCA_TIMING_METRICS` and `ORCA_COMPACT_SUMMARY` are `0|1`
 5. `AGENT_REASONING_LEVEL` format validation when set
 6. `PROMPT_TEMPLATE` exists
+7. `ORCA_PRIMARY_REPO` points to a valid git worktree
+8. `ORCA_WITH_LOCK_PATH` points to an executable helper
 
 Signal handling:
 
@@ -201,6 +207,11 @@ Discovery path is injected to agents as:
 - prompt placeholders: `__DISCOVERY_LOG_PATH__`, `__AGENT_DISCOVERY_LOG_PATH__`
 - env vars: `ORCA_DISCOVERY_LOG_PATH`, `ORCA_AGENT_DISCOVERY_LOG_PATH`
 
+Primary repo and lock helper are injected to agents as:
+
+- prompt placeholders: `__PRIMARY_REPO__`, `__ORCA_PRIMARY_REPO__`, `__WITH_LOCK_PATH__`, `__ORCA_WITH_LOCK_PATH__`
+- env vars: `ORCA_PRIMARY_REPO`, `ORCA_WITH_LOCK_PATH`
+
 ## Runtime Knobs
 
 - `MAX_RUNS`: issue runs per loop (`0` means unbounded unless agent requests stop)
@@ -214,3 +225,5 @@ Discovery path is injected to agents as:
 - `AGENT_COMMAND`: full command for each run
 - `ORCA_LOCK_SCOPE`: default lock scope for `with-lock.sh` (`merge`)
 - `ORCA_LOCK_TIMEOUT_SECONDS`: lock timeout seconds (default `120`)
+- `ORCA_PRIMARY_REPO`: primary repository path used for lock-guarded merge/push operations (default repo root)
+- `ORCA_WITH_LOCK_PATH`: absolute path to lock helper passed to agents (default `<repo-root>/scripts/orca/with-lock.sh`)

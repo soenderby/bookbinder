@@ -16,9 +16,12 @@ Open `http://127.0.0.1:8000` and use the single-page form to upload a PDF and ge
 Run the required MVP checks:
 
 ```bash
+python -c "from pathlib import Path; import bookbinder; from bookbinder.web.app import create_app; root=Path('.').resolve(); assert root in Path(bookbinder.__file__).resolve().parents; assert root in Path(create_app.__code__.co_filename).resolve().parents; print('import paths ok')"
 pytest -m mvp_unit
 pytest -m mvp_integration
 ```
+
+Packaging smoke coverage for editable installs with a top-level `generated/` directory runs in `tests/mvp_unit/test_packaging.py` as part of `pytest -m mvp_unit`.
 
 ## MVP Notes
 

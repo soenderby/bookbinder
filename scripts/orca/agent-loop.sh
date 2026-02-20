@@ -27,6 +27,8 @@ else
   fi
 fi
 PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/orca/AGENT_PROMPT.md}"
+PRIMARY_REPO="${ORCA_PRIMARY_REPO:-${ROOT}}"
+LOCK_HELPER_PATH="${ORCA_WITH_LOCK_PATH:-${ROOT}/scripts/orca/with-lock.sh}"
 MAX_RUNS="${MAX_RUNS:-0}"
 RUN_SLEEP_SECONDS="${RUN_SLEEP_SECONDS:-2}"
 ORCA_TIMING_METRICS="${ORCA_TIMING_METRICS:-1}"
@@ -59,6 +61,16 @@ fi
 
 if [[ ! -f "${PROMPT_TEMPLATE}" ]]; then
   echo "PROMPT_TEMPLATE not found: ${PROMPT_TEMPLATE}" >&2
+  exit 1
+fi
+
+if ! git -C "${PRIMARY_REPO}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "ORCA_PRIMARY_REPO does not look like a git worktree: ${PRIMARY_REPO}" >&2
+  exit 1
+fi
+
+if [[ ! -x "${LOCK_HELPER_PATH}" ]]; then
+  echo "ORCA_WITH_LOCK_PATH must be executable: ${LOCK_HELPER_PATH}" >&2
   exit 1
 fi
 
@@ -148,6 +160,8 @@ start_run_artifacts() {
   log "run log: ${LOGFILE}"
   log "summary json path: ${SUMMARY_JSON_FILE}"
   log "discovery log path: ${DISCOVERY_LOG_FILE}"
+  log "primary repo path: ${PRIMARY_REPO}"
+  log "lock helper path: ${LOCK_HELPER_PATH}"
 }
 
 build_agent_command_for_run() {
@@ -181,6 +195,10 @@ write_prompt_file() {
   prompt_text="${prompt_text//__SUMMARY_JSON_PATH__/${SUMMARY_JSON_FILE}}"
   prompt_text="${prompt_text//__DISCOVERY_LOG_PATH__/${DISCOVERY_LOG_FILE}}"
   prompt_text="${prompt_text//__AGENT_DISCOVERY_LOG_PATH__/${DISCOVERY_LOG_FILE}}"
+  prompt_text="${prompt_text//__PRIMARY_REPO__/${PRIMARY_REPO}}"
+  prompt_text="${prompt_text//__ORCA_PRIMARY_REPO__/${PRIMARY_REPO}}"
+  prompt_text="${prompt_text//__WITH_LOCK_PATH__/${LOCK_HELPER_PATH}}"
+  prompt_text="${prompt_text//__ORCA_WITH_LOCK_PATH__/${LOCK_HELPER_PATH}}"
 
   printf '%s\n' "${prompt_text}" > "${prompt_file}"
 }
@@ -467,6 +485,8 @@ cd "${WORKTREE}"
 log "starting loop in ${WORKTREE}"
 log "session id: ${AGENT_SESSION_ID}"
 log "agent discovery log: ${DISCOVERY_LOG_FILE}"
+log "agent primary repo: ${PRIMARY_REPO}"
+log "agent lock helper: ${LOCK_HELPER_PATH}"
 if [[ "${MAX_RUNS}" -eq 0 ]]; then
   log "run mode: unbounded"
 else
@@ -497,6 +517,8 @@ while true; do
     ORCA_AGENT_NAME="${AGENT_NAME}" \
     ORCA_DISCOVERY_LOG_PATH="${DISCOVERY_LOG_FILE}" \
     ORCA_AGENT_DISCOVERY_LOG_PATH="${DISCOVERY_LOG_FILE}" \
+    ORCA_PRIMARY_REPO="${PRIMARY_REPO}" \
+    ORCA_WITH_LOCK_PATH="${LOCK_HELPER_PATH}" \
     bash -lc "${RUN_AGENT_COMMAND}" < "${prompt_file}" >> "${LOGFILE}" 2>&1; then
     RUN_EXIT_CODE=0
   else

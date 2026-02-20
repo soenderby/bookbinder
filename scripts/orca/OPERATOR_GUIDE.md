@@ -103,9 +103,11 @@ Agent does:
 1. choose and claim issues
 2. implement and validate
 3. update issue states and notes
-4. merge/push using `scripts/orca/with-lock.sh`
+4. merge/push using `ORCA_WITH_LOCK_PATH` against `ORCA_PRIMARY_REPO`
 5. close issues
 6. record discoveries and summary JSON
+
+Orca injects `ORCA_WITH_LOCK_PATH` and `ORCA_PRIMARY_REPO` into each run so merge scripts can use stable absolute paths and avoid worktree-relative path mistakes.
 
 ## Operating Playbook
 
@@ -157,6 +159,7 @@ Scale down cleanly:
    - normal in parallel operation; agent should select another issue
 3. Merge/push failures:
    - agent-owned; inspect logs and issue notes, then restart sessions as needed
+   - ensure lock-guarded merge scripts use `set -euo pipefail` so early command failures cannot be masked
 4. Immediate agent command failures:
    - verify CLI auth/config and `AGENT_COMMAND`
 
@@ -165,7 +168,7 @@ Scale down cleanly:
 1. avoid destructive git commands during active swarm sessions
 2. avoid manually editing multiple agent worktrees at once unless deliberate
 3. keep beads as source of truth for queue state and dependencies
-4. keep shared-target writes inside `with-lock.sh`
+4. keep shared-target writes inside `ORCA_WITH_LOCK_PATH` lock-guarded commands
 
 ## Operator Checklist
 
