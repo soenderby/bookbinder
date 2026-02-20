@@ -47,5 +47,76 @@
       </section>
       {% endif %}
     </main>
+    <script>
+      (function () {
+        const form = document.querySelector('form[action="/impose"]');
+        if (!form) {
+          return;
+        }
+
+        const storageKey = "bookbinder.form.v1";
+        const fields = [
+          { id: "paper_size", kind: "value" },
+          { id: "signature_length", kind: "value" },
+          { id: "flyleafs", kind: "value" },
+          { id: "duplex_rotate", kind: "checked" },
+        ];
+
+        function readSavedState() {
+          try {
+            const raw = window.localStorage.getItem(storageKey);
+            if (!raw) {
+              return {};
+            }
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === "object" ? parsed : {};
+          } catch {
+            return {};
+          }
+        }
+
+        function restoreState() {
+          const saved = readSavedState();
+          for (const field of fields) {
+            const element = document.getElementById(field.id);
+            if (!element || !(field.id in saved)) {
+              continue;
+            }
+            const value = saved[field.id];
+            if (field.kind === "checked") {
+              element.checked = Boolean(value);
+              continue;
+            }
+            if (element.tagName === "SELECT") {
+              const valid = Array.from(element.options).some((option) => option.value === String(value));
+              if (!valid) {
+                continue;
+              }
+            }
+            element.value = String(value);
+          }
+        }
+
+        function persistState() {
+          const nextState = {};
+          for (const field of fields) {
+            const element = document.getElementById(field.id);
+            if (!element) {
+              continue;
+            }
+            nextState[field.id] = field.kind === "checked" ? element.checked : element.value;
+          }
+          try {
+            window.localStorage.setItem(storageKey, JSON.stringify(nextState));
+          } catch {
+            // Ignore storage unavailability (private mode, quota, disabled).
+          }
+        }
+
+        restoreState();
+        form.addEventListener("change", persistState);
+        form.addEventListener("submit", persistState);
+      })();
+    </script>
   </body>
 </html>
