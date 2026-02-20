@@ -398,6 +398,63 @@ def test_preview_sheet_geometry_matches_first_imposed_sheet_mapping(tmp_path: Pa
     assert preview_sheet["slots"][1]["token"] == expected_first_side.right
 
 
+def test_positioning_mode_flows_from_form_parsing_to_preview_geometry(tmp_path: Path) -> None:
+    centered, _, centered_error = _parse_form_input(
+        paper_size="A4",
+        signature_length=1,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="original",
+        positioning_mode="centered",
+        output_mode="aggregated",
+    )
+    binding_aligned, _, binding_error = _parse_form_input(
+        paper_size="A4",
+        signature_length=1,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="original",
+        positioning_mode="binding-aligned",
+        output_mode="aggregated",
+    )
+    assert centered_error is None
+    assert binding_error is None
+    assert centered.positioning_mode == "centered"
+    assert binding_aligned.positioning_mode == "binding_aligned"
+
+    payload = _pdf_bytes(4)
+    centered_result, centered_impose_error = _impose_payload(
+        payload=payload,
+        source_name="positioning.pdf",
+        options=centered,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
+    binding_result, binding_impose_error = _impose_payload(
+        payload=payload,
+        source_name="positioning.pdf",
+        options=binding_aligned,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
+    assert centered_impose_error is None
+    assert binding_impose_error is None
+    assert centered_result is not None
+    assert binding_result is not None
+
+    centered_slots = centered_result["preview_sheet"]["slots"]
+    binding_slots = binding_result["preview_sheet"]["slots"]
+
+    # For original scaling, binding-aligned shifts left slot toward spine and right slot to slot origin.
+    assert binding_slots[0]["x_offset"] < centered_slots[0]["x_offset"]
+    assert binding_slots[1]["x_offset"] > centered_slots[1]["x_offset"]
+    assert binding_slots[1]["x_offset"] == pytest.approx(binding_slots[1]["slot_x"])
+
+
 @pytest.mark.parametrize("request_id", ["invalid", "abc", "g" * 32, "A" * 32])
 def test_download_rejects_invalid_request_id(tmp_path: Path, request_id: str) -> None:
     with pytest.raises(HTTPException) as exc_info:
