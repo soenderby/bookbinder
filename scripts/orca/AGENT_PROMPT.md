@@ -15,7 +15,7 @@ Required sequence:
 5. Create new beads for follow-up work discovered while implementing (edge cases, bugs, test gaps, docs).
 6. Run relevant tests/quality checks.
 7. Update documentation if behavior/workflow changed.
-8. Close the issue when complete: `bd close __ISSUE_ID__ --reason "completed"`.
+8. Do not close the issue directly. The outer loop merges to main and closes the issue only after merge succeeds.
 9. Finish session with landing-the-plane steps from `AGENTS.md`, including pushing to origin.
 10. If push fails due missing upstream, set it and retry:
     - `git push -u origin $(git branch --show-current)`

@@ -26,13 +26,17 @@ if [[ -n "${AGENT_COMMAND+x}" ]]; then
 fi
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
 MAX_RUNS="${MAX_RUNS:-0}"
+ORCA_MERGE_REMOTE="${ORCA_MERGE_REMOTE:-origin}"
+ORCA_MERGE_TARGET_BRANCH="${ORCA_MERGE_TARGET_BRANCH:-main}"
+ORCA_MERGE_LOCK_TIMEOUT_SECONDS="${ORCA_MERGE_LOCK_TIMEOUT_SECONDS:-120}"
+ORCA_MERGE_MAX_ATTEMPTS="${ORCA_MERGE_MAX_ATTEMPTS:-3}"
 
 check_prerequisites() {
   local missing=()
   local cmd
   local agent_command_bin
 
-  for cmd in git tmux bd jq; do
+  for cmd in git tmux bd jq flock; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
       missing+=("${cmd}")
     fi
@@ -105,6 +109,16 @@ if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+if ! [[ "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[start] ORCA_MERGE_LOCK_TIMEOUT_SECONDS must be a positive integer: ${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" >&2
+  exit 1
+fi
+
+if ! [[ "${ORCA_MERGE_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[start] ORCA_MERGE_MAX_ATTEMPTS must be a positive integer: ${ORCA_MERGE_MAX_ATTEMPTS}" >&2
+  exit 1
+fi
+
 if [[ -n "${AGENT_REASONING_LEVEL}" && ! "${AGENT_REASONING_LEVEL}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "[start] reasoning level must contain only letters, digits, dot, underscore, or dash: ${AGENT_REASONING_LEVEL}" >&2
   exit 1
@@ -144,7 +158,7 @@ for i in $(seq 1 "${COUNT}"); do
   fi
 
   echo "[start] launching ${session} in ${worktree}"
-  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_REASONING_LEVEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q %q" \
+  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_REASONING_LEVEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q ORCA_MERGE_REMOTE=%q ORCA_MERGE_TARGET_BRANCH=%q ORCA_MERGE_LOCK_TIMEOUT_SECONDS=%q ORCA_MERGE_MAX_ATTEMPTS=%q %q" \
     "${ROOT}" \
     "agent-${i}" \
     "${session_id}" \
@@ -154,6 +168,10 @@ for i in $(seq 1 "${COUNT}"); do
     "${AGENT_COMMAND}" \
     "${PROMPT_TEMPLATE}" \
     "${MAX_RUNS}" \
+    "${ORCA_MERGE_REMOTE}" \
+    "${ORCA_MERGE_TARGET_BRANCH}" \
+    "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" \
+    "${ORCA_MERGE_MAX_ATTEMPTS}" \
     "${SCRIPT_DIR}/agent-loop.sh")"
   tmux new-session -d -s "${session}" "${tmux_cmd}"
 done

@@ -27,5 +27,6 @@ Use these documents when running multi-agent parallel delivery in this repositor
 1. Coordinator prepares and assigns unblocked work.
 2. Each worker claims exactly one issue via `bd update <id> --claim`.
 3. Workers execute `worker-loop.md` and create follow-up beads as needed.
-4. Workers submit handoff using `handoff-template.md`.
-5. Coordinator merges outcomes and closes session per `AGENTS.md`.
+4. Orca loop merges completed worker branches into `main` and closes issues after merge success.
+5. Workers submit handoff using `handoff-template.md`.
+6. Coordinator closes session per `AGENTS.md`.

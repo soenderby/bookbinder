@@ -10,7 +10,9 @@ Each loop:
 1. reads ready work from beads
 2. claims exactly one issue atomically
 3. runs one autonomous agent pass for that issue
-4. continues while work exists and exits when no ready tasks remain (or run limit is reached)
+4. merges the worker branch into `main` using a global merge lock
+5. closes the issue only after merge succeeds
+6. continues while work exists and exits when no ready tasks remain (or run limit is reached)
 
 ## 2. Prerequisites
 
@@ -21,6 +23,7 @@ git --version
 bd --version
 tmux -V
 jq --version
+flock --version
 codex --version
 ```
 
@@ -89,8 +92,8 @@ bd list --status closed --sort closed --reverse --limit 20
 ```bash
 ls -lt agent-logs
 
-# tail one agent
-tail -f agent-logs/agent-1.log
+# tail newest log file
+tail -f "$(ls -1t agent-logs | head -n 1 | sed 's#^#agent-logs/#')"
 ```
 
 ## 5.3 Attach to a running tmux session
@@ -170,13 +173,20 @@ If a specific agent keeps failing:
 bd show <id>
 ```
 
-4. push rejected from a worktree branch:
+4. merge step fails (conflict/push failure):
+- Loop returns the issue to `open` with a merge failure note and stops that worker loop.
+- Resolve conflict on the source branch, push, then restart swarm:
+```bash
+./bb orca start 2 --continuous
+```
+
+5. push rejected from a worktree branch:
 - Set upstream once in that worktree:
 ```bash
 git push -u origin $(git branch --show-current)
 ```
 
-5. agent CLI command fails immediately:
+6. agent CLI command fails immediately:
 - Re-check `codex --version` and authentication.
 - Confirm `AGENT_COMMAND` override is valid if used.
 

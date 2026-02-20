@@ -88,6 +88,8 @@ When implementation and checks are complete:
 bd close <id> --reason "completed"
 ```
 
+When running under Orca persistent loop mode, follow the prompt override: do not close directly, because the outer loop closes only after merge to `main` succeeds.
+
 If not complete, leave issue `in_progress` and append clear notes:
 
 ```bash

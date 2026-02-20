@@ -27,9 +27,14 @@ else
   fi
 fi
 PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/orca/AGENT_PROMPT.md}"
+MERGE_SCRIPT="${MERGE_SCRIPT:-${ROOT}/scripts/orca/merge-after-run.sh}"
 MAX_RUNS="${MAX_RUNS:-0}"
 READY_MAX_ATTEMPTS="${READY_MAX_ATTEMPTS:-5}"
 READY_RETRY_SECONDS="${READY_RETRY_SECONDS:-3}"
+ORCA_MERGE_REMOTE="${ORCA_MERGE_REMOTE:-origin}"
+ORCA_MERGE_TARGET_BRANCH="${ORCA_MERGE_TARGET_BRANCH:-main}"
+ORCA_MERGE_LOCK_TIMEOUT_SECONDS="${ORCA_MERGE_LOCK_TIMEOUT_SECONDS:-120}"
+ORCA_MERGE_MAX_ATTEMPTS="${ORCA_MERGE_MAX_ATTEMPTS:-3}"
 
 if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
   echo "MAX_RUNS must be a non-negative integer (0 means unbounded mode): ${MAX_RUNS}"
@@ -46,13 +51,29 @@ if ! [[ "${READY_RETRY_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
+if ! [[ "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ORCA_MERGE_LOCK_TIMEOUT_SECONDS must be a positive integer: ${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}"
+  exit 1
+fi
+
+if ! [[ "${ORCA_MERGE_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ORCA_MERGE_MAX_ATTEMPTS must be a positive integer: ${ORCA_MERGE_MAX_ATTEMPTS}"
+  exit 1
+fi
+
 if [[ -n "${AGENT_REASONING_LEVEL}" && ! "${AGENT_REASONING_LEVEL}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "AGENT_REASONING_LEVEL must contain only letters, digits, dot, underscore, or dash: ${AGENT_REASONING_LEVEL}"
   exit 1
 fi
 
+if [[ ! -x "${MERGE_SCRIPT}" ]]; then
+  echo "MERGE_SCRIPT must be executable: ${MERGE_SCRIPT}"
+  exit 1
+fi
+
 runs_completed=0
 current_issue_id=""
+current_issue_should_reopen=1
 cleanup_in_progress=0
 EXPECTED_BRANCH=""
 
@@ -86,11 +107,19 @@ start_run_logfile() {
   log "starting run ${run_number} for ${issue_id}"
   log "session id: ${AGENT_SESSION_ID}"
   log "worktree: ${WORKTREE}"
+  log "merge target: ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH}"
 }
 
 release_claim_if_needed() {
   local reason="$1"
   if [[ -z "${current_issue_id}" ]]; then
+    return
+  fi
+
+  if [[ "${current_issue_should_reopen}" -eq 0 ]]; then
+    log "leaving ${current_issue_id} as-is during ${reason} (already merged)"
+    current_issue_id=""
+    current_issue_should_reopen=1
     return
   fi
 
@@ -103,6 +132,7 @@ release_claim_if_needed() {
   fi
 
   current_issue_id=""
+  current_issue_should_reopen=1
 }
 
 cleanup_on_signal() {
@@ -208,6 +238,121 @@ update_issue_to_open_with_retry() {
   return 1
 }
 
+issue_status_with_retry() {
+  local issue_id="$1"
+  local attempts=1
+  local max_attempts=3
+  local issue_json
+  local status
+
+  while [[ "${attempts}" -le "${max_attempts}" ]]; do
+    if issue_json="$(bd show "${issue_id}" --json 2>/dev/null)" && status="$(jq -r '.[0].status // empty' <<<"${issue_json}" 2>/dev/null)" && [[ -n "${status}" ]]; then
+      printf '%s\n' "${status}"
+      return 0
+    fi
+
+    log "failed to read status for ${issue_id}; attempt ${attempts}/${max_attempts}"
+    attempts=$((attempts + 1))
+    sleep 2
+  done
+
+  return 1
+}
+
+close_issue_if_needed_with_retry() {
+  local issue_id="$1"
+  local status
+  local attempts=1
+  local max_attempts=3
+
+  if ! status="$(issue_status_with_retry "${issue_id}")"; then
+    log "unable to determine status for ${issue_id}; cannot close automatically"
+    return 1
+  fi
+
+  if [[ "${status}" == "closed" ]]; then
+    log "issue ${issue_id} already closed"
+    return 0
+  fi
+
+  while [[ "${attempts}" -le "${max_attempts}" ]]; do
+    if bd close "${issue_id}" --reason "completed" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    log "failed to close ${issue_id}; attempt ${attempts}/${max_attempts}"
+    attempts=$((attempts + 1))
+    sleep 2
+  done
+
+  return 1
+}
+
+append_issue_note_with_retry() {
+  local issue_id="$1"
+  local note="$2"
+  local reason="$3"
+  local attempts=1
+  local max_attempts=3
+
+  while [[ "${attempts}" -le "${max_attempts}" ]]; do
+    if bd update "${issue_id}" --append-notes "${note}" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    log "failed to append notes to ${issue_id} (${reason}); attempt ${attempts}/${max_attempts}"
+    attempts=$((attempts + 1))
+    sleep 2
+  done
+
+  return 1
+}
+
+merge_issue_or_return_to_open() {
+  local issue_id="$1"
+  local merge_failure_note
+  local close_failure_note
+
+  log "starting merge for ${issue_id}: ${EXPECTED_BRANCH} -> ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH}"
+  if ! "${MERGE_SCRIPT}" \
+    --source-branch "${EXPECTED_BRANCH}" \
+    --remote "${ORCA_MERGE_REMOTE}" \
+    --target-branch "${ORCA_MERGE_TARGET_BRANCH}" \
+    --lock-timeout "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" \
+    --max-attempts "${ORCA_MERGE_MAX_ATTEMPTS}" >>"${LOGFILE}" 2>&1; then
+    merge_failure_note="Merge failed in ${AGENT_NAME} at $(date -Iseconds). Could not merge ${EXPECTED_BRANCH} into ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH}. Returning issue to open for retry."
+    if update_issue_to_open_with_retry "${issue_id}" "${merge_failure_note}" "merge-failure"; then
+      log "merge failed; returned ${issue_id} to open"
+    else
+      log "merge failed and could not return ${issue_id} to open; manual intervention needed"
+    fi
+    current_issue_id=""
+    current_issue_should_reopen=1
+    return 1
+  fi
+
+  # Merge succeeded. Never auto-reopen this issue from signal/exit handlers now.
+  current_issue_should_reopen=0
+  log "merge succeeded for ${issue_id}"
+
+  if close_issue_if_needed_with_retry "${issue_id}"; then
+    log "issue ${issue_id} closed after successful merge"
+    current_issue_id=""
+    current_issue_should_reopen=1
+    return 0
+  fi
+
+  close_failure_note="Work for ${issue_id} was merged into ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH} at $(date -Iseconds), but automatic issue close failed. Manual close required."
+  if append_issue_note_with_retry "${issue_id}" "${close_failure_note}" "close-after-merge-failure"; then
+    log "merge completed for ${issue_id}, but issue close failed; note appended"
+  else
+    log "merge completed for ${issue_id}, but issue close failed and note append failed; manual intervention needed"
+  fi
+  current_issue_id=""
+  current_issue_should_reopen=1
+  return 1
+}
+
 sync_with_remote_or_exit() {
   local context="$1"
 
@@ -248,6 +393,8 @@ else
 fi
 
 while true; do
+  stop_after_iteration=0
+
   if [[ "${MAX_RUNS}" -gt 0 && "${runs_completed}" -ge "${MAX_RUNS}" ]]; then
     log "max runs reached (${runs_completed}/${MAX_RUNS}); exiting loop"
     break
@@ -274,6 +421,7 @@ while true; do
 
   log "claimed ${issue_id}"
   current_issue_id="${issue_id}"
+  current_issue_should_reopen=1
   start_run_logfile "${issue_id}"
 
   prompt_text="$(cat "${PROMPT_TEMPLATE}")"
@@ -288,7 +436,9 @@ while true; do
   if bash -lc "${AGENT_COMMAND}" < "${tmp_prompt}" >>"${LOGFILE}" 2>&1; then
     log "agent command finished for ${issue_id}"
     guard_worktree_state_or_exit "post-agent:${issue_id}"
-    current_issue_id=""
+    if ! merge_issue_or_return_to_open "${issue_id}"; then
+      stop_after_iteration=1
+    fi
   else
     log "agent command failed for ${issue_id}; returning issue to open"
     failure_note="Agent loop failure in ${AGENT_NAME} at $(date -Iseconds). Command: ${AGENT_COMMAND}. Returning issue to open for retry."
@@ -298,6 +448,7 @@ while true; do
       log "failed to return ${issue_id} to open; manual intervention needed"
     fi
     current_issue_id=""
+    current_issue_should_reopen=1
   fi
 
   rm -f "${tmp_prompt}"
@@ -309,6 +460,12 @@ while true; do
     log "completed run ${runs_completed}"
   else
     log "completed run ${runs_completed}/${MAX_RUNS}"
+  fi
+
+  if [[ "${stop_after_iteration}" -eq 1 ]]; then
+    log "stopping loop after run ${runs_completed} due to merge/finalization failure"
+    LOGFILE=""
+    break
   fi
 
   LOGFILE=""

@@ -53,8 +53,9 @@ Use `docs/agents/handoff-template.md`.
 
 Before session ends:
 1. Confirm all completed work has closed beads.
-2. Confirm all discovered follow-up work has beads.
-3. Confirm all local commits are pushed.
-4. Confirm `git status` is up to date with origin.
+2. Confirm completed work was merged into `main` (Orca loop handles this per run).
+3. Confirm all discovered follow-up work has beads.
+4. Confirm all local commits are pushed.
+5. Confirm `git status` is up to date with origin.
 
 Reference: `AGENTS.md` landing-the-plane checklist is mandatory.
