@@ -6,12 +6,24 @@ from pathlib import Path
 from typing import Literal, Sequence
 
 from pypdf import PdfReader, PdfWriter, Transformation
+from pypdf.generic import DecodedStreamObject
 
 from bookbinder.constants import PAPER_SIZES
 from bookbinder.imposition.core import BLANK_PAGE, PageToken, impose_signature
 
 ScalingMode = Literal["proportional", "stretch", "original"]
 _SCALING_MODES: tuple[ScalingMode, ...] = ("proportional", "stretch", "original")
+
+
+@dataclass(frozen=True)
+class PrintMarksOptions:
+    crop: bool = False
+    fold: bool = False
+    signature_order: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.crop or self.fold or self.signature_order
 
 
 @dataclass(frozen=True)
@@ -46,6 +58,76 @@ class PreviewArtifact:
     output_width: float
     output_height: float
     slots: tuple[SlotGeometry, SlotGeometry]
+
+
+def _clamp(value: float, *, lower: float, upper: float) -> float:
+    return max(lower, min(value, upper))
+
+
+def _build_print_mark_commands(
+    *,
+    output_width: float,
+    output_height: float,
+    options: PrintMarksOptions,
+    signature_index: int,
+    side_index: int,
+) -> bytes:
+    if not options.enabled:
+        return b""
+
+    max_x = max(output_width, 0.0)
+    max_y = max(output_height, 0.0)
+    margin = max(min(min(max_x, max_y) * 0.02, 18.0), 4.0)
+    mark_length = max(min(min(max_x, max_y) * 0.03, 14.0), 4.0)
+    line_width = max(min(min(max_x, max_y) * 0.0018, 1.2), 0.3)
+    commands: list[str] = ["q", "% bookbinder-print-marks", "0 0 0 RG", f"{line_width:.3f} w"]
+
+    def line(x1: float, y1: float, x2: float, y2: float) -> None:
+        commands.append(
+            f"{_clamp(x1, lower=0.0, upper=max_x):.3f} {_clamp(y1, lower=0.0, upper=max_y):.3f} m "
+            f"{_clamp(x2, lower=0.0, upper=max_x):.3f} {_clamp(y2, lower=0.0, upper=max_y):.3f} l S"
+        )
+
+    if options.crop:
+        left_x = margin
+        right_x = max_x - margin
+        bottom_y = margin
+        top_y = max_y - margin
+        line(left_x, bottom_y, left_x + mark_length, bottom_y)
+        line(left_x, bottom_y, left_x, bottom_y + mark_length)
+        line(right_x, bottom_y, right_x - mark_length, bottom_y)
+        line(right_x, bottom_y, right_x, bottom_y + mark_length)
+        line(left_x, top_y, left_x + mark_length, top_y)
+        line(left_x, top_y, left_x, top_y - mark_length)
+        line(right_x, top_y, right_x - mark_length, top_y)
+        line(right_x, top_y, right_x, top_y - mark_length)
+
+    if options.fold:
+        center_x = max_x / 2.0
+        line(center_x, margin, center_x, margin + mark_length)
+        line(center_x, max_y - margin, center_x, max_y - margin - mark_length)
+
+    if options.signature_order:
+        bar_width = max(mark_length * 0.55, 2.0)
+        bar_height = max(mark_length * 0.45, 2.0)
+        bar_gap = max(bar_width * 0.5, 1.0)
+        lane_count = max(int((max_x - (2.0 * margin)) // (bar_width + bar_gap)), 1)
+        lane_index = (signature_index * 2 + side_index) % lane_count
+        bar_x = _clamp(margin + (lane_index * (bar_width + bar_gap)), lower=0.0, upper=max_x - bar_width)
+        bar_y = _clamp(margin * 0.5, lower=0.0, upper=max_y - bar_height)
+        commands.append(f"{bar_x:.3f} {bar_y:.3f} {bar_width:.3f} {bar_height:.3f} re f")
+
+    commands.append("Q")
+    return ("\n".join(commands) + "\n").encode("ascii")
+
+
+def _append_page_commands(imposed_page, commands: bytes) -> None:
+    if not commands:
+        return
+
+    stream = DecodedStreamObject()
+    stream.set_data((imposed_page._get_contents_as_bytes() or b"") + commands)
+    imposed_page.replace_contents(stream)
 
 
 def resolve_paper_dimensions(paper_size: str) -> tuple[float, float]:
@@ -229,6 +311,7 @@ def write_first_sheet_preview(
     custom_dimensions: tuple[float, float] | None = None,
     scaling_mode: ScalingMode = "proportional",
     blank_token: str = BLANK_PAGE,
+    print_marks: PrintMarksOptions | None = None,
 ) -> PreviewArtifact:
     if custom_dimensions is not None:
         output_width, output_height = custom_dimensions
@@ -265,6 +348,17 @@ def write_first_sheet_preview(
         output_height=output_height,
         blank_token=blank_token,
         scaling_mode=scaling_mode,
+    )
+    mark_settings = print_marks or PrintMarksOptions()
+    _append_page_commands(
+        imposed_page,
+        _build_print_mark_commands(
+            output_width=output_width,
+            output_height=output_height,
+            options=mark_settings,
+            signature_index=0,
+            side_index=0,
+        ),
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -309,6 +403,7 @@ def write_duplex_aggregated_pdf(
     custom_dimensions: tuple[float, float] | None = None,
     scaling_mode: ScalingMode = "proportional",
     blank_token: str = BLANK_PAGE,
+    print_marks: PrintMarksOptions | None = None,
 ) -> GeneratedArtifact:
     if custom_dimensions is not None:
         output_width, output_height = custom_dimensions
@@ -317,10 +412,11 @@ def write_duplex_aggregated_pdf(
 
     writer = PdfWriter()
     placed_tokens: list[tuple[PageToken, PageToken]] = []
+    mark_settings = print_marks or PrintMarksOptions()
 
-    for signature in signatures:
+    for signature_index, signature in enumerate(signatures):
         sides = impose_signature(signature, duplex_rotate=duplex_rotate)
-        for side in sides:
+        for side_index, side in enumerate(sides):
             imposed_page = writer.add_blank_page(width=output_width, height=output_height)
             _place_token(
                 imposed_page,
@@ -341,6 +437,16 @@ def write_duplex_aggregated_pdf(
                 output_height=output_height,
                 blank_token=blank_token,
                 scaling_mode=scaling_mode,
+            )
+            _append_page_commands(
+                imposed_page,
+                _build_print_mark_commands(
+                    output_width=output_width,
+                    output_height=output_height,
+                    options=mark_settings,
+                    signature_index=signature_index,
+                    side_index=side_index,
+                ),
             )
             placed_tokens.append((side.left, side.right))
 

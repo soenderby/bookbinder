@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,8 @@ from pypdf import PdfReader, PdfWriter
 
 from bookbinder.imposition.core import BLANK_PAGE
 from bookbinder.imposition.pdf_writer import (
+    PrintMarksOptions,
+    _build_print_mark_commands,
     _place_token,
     _slot_geometry,
     deterministic_preview_filename,
@@ -196,3 +199,90 @@ def test_slot_geometry_rejects_unknown_scaling_mode() -> None:
             blank_token=BLANK_PAGE,
             scaling_mode="invalid",  # type: ignore[arg-type]
         )
+
+
+def test_write_duplex_aggregated_pdf_marks_disabled_keeps_baseline_output(tmp_path: Path) -> None:
+    reader = _single_page_reader()
+    signatures = [[0, BLANK_PAGE, BLANK_PAGE, BLANK_PAGE]]
+    baseline_path = tmp_path / "baseline.pdf"
+    disabled_path = tmp_path / "disabled.pdf"
+
+    write_duplex_aggregated_pdf(
+        reader=reader,
+        signatures=signatures,
+        output_path=baseline_path,
+        paper_size="A4",
+        duplex_rotate=False,
+    )
+    write_duplex_aggregated_pdf(
+        reader=reader,
+        signatures=signatures,
+        output_path=disabled_path,
+        paper_size="A4",
+        duplex_rotate=False,
+        print_marks=PrintMarksOptions(),
+    )
+
+    baseline_reader = PdfReader(str(baseline_path))
+    disabled_reader = PdfReader(str(disabled_path))
+    assert len(baseline_reader.pages) == len(disabled_reader.pages)
+    for baseline_page, disabled_page in zip(baseline_reader.pages, disabled_reader.pages, strict=True):
+        assert baseline_page._get_contents_as_bytes() == disabled_page._get_contents_as_bytes()
+
+
+def test_write_duplex_aggregated_pdf_enabled_marks_injects_content(tmp_path: Path) -> None:
+    reader = _single_page_reader()
+    output_path = tmp_path / "marked.pdf"
+
+    write_duplex_aggregated_pdf(
+        reader=reader,
+        signatures=[[0, BLANK_PAGE, BLANK_PAGE, BLANK_PAGE]],
+        output_path=output_path,
+        paper_size="A4",
+        duplex_rotate=False,
+        print_marks=PrintMarksOptions(crop=True, fold=True, signature_order=True),
+    )
+
+    generated = PdfReader(str(output_path))
+    assert generated.pages
+    first_page_bytes = generated.pages[0]._get_contents_as_bytes()
+    assert first_page_bytes is not None
+    assert b"bookbinder-print-marks" in first_page_bytes
+    assert b" re f" in first_page_bytes
+
+
+def test_build_print_mark_commands_stay_within_page_bounds() -> None:
+    output_width = 40.0
+    output_height = 30.0
+    commands = _build_print_mark_commands(
+        output_width=output_width,
+        output_height=output_height,
+        options=PrintMarksOptions(crop=True, fold=True, signature_order=True),
+        signature_index=13,
+        side_index=1,
+    ).decode("ascii")
+    for line_match in re.finditer(
+        r"(?P<x1>-?\d+\.\d+) (?P<y1>-?\d+\.\d+) m (?P<x2>-?\d+\.\d+) (?P<y2>-?\d+\.\d+) l S",
+        commands,
+    ):
+        x1 = float(line_match.group("x1"))
+        y1 = float(line_match.group("y1"))
+        x2 = float(line_match.group("x2"))
+        y2 = float(line_match.group("y2"))
+        assert 0.0 <= x1 <= output_width
+        assert 0.0 <= x2 <= output_width
+        assert 0.0 <= y1 <= output_height
+        assert 0.0 <= y2 <= output_height
+
+    rect_match = re.search(r"(?P<x>-?\d+\.\d+) (?P<y>-?\d+\.\d+) (?P<w>-?\d+\.\d+) (?P<h>-?\d+\.\d+) re f", commands)
+    assert rect_match is not None
+    x = float(rect_match.group("x"))
+    y = float(rect_match.group("y"))
+    width = float(rect_match.group("w"))
+    height = float(rect_match.group("h"))
+    assert 0.0 <= x <= output_width
+    assert 0.0 <= y <= output_height
+    assert width >= 0.0
+    assert height >= 0.0
+    assert x + width <= output_width
+    assert y + height <= output_height
