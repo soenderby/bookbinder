@@ -76,13 +76,7 @@ Use this pattern for shared-target writes:
 
 ```bash
 scripts/orca/with-lock.sh --scope merge --timeout 120 -- \
-  bash -lc '
-    git fetch origin main
-    git checkout main
-    git pull --ff-only origin main
-    git merge --no-ff "$(git branch --show-current)"
-    git push origin main
-  '
+  scripts/orca/merge-primary-main.sh
 ```
 
 If upstream is missing for your branch:

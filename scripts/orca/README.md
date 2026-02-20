@@ -24,10 +24,12 @@ Orca intentionally keeps documentation to three markdown files in this directory
 - `status`
 - `setup-worktrees [count]`
 - `with-lock [--scope NAME] [--timeout SECONDS] -- <command> [args...]`
+- `merge-primary-main [--repo PATH] [--source-branch NAME] [--target-branch NAME] [--remote NAME]`
 
 Helper script (direct invocation):
 
 - `scripts/orca/with-lock.sh [--scope NAME] [--timeout SECONDS] -- <command> [args...]`
+- `scripts/orca/merge-primary-main.sh [--repo PATH] [--source-branch NAME] [--target-branch NAME] [--remote NAME]`
 
 ## TODO
 
@@ -58,6 +60,7 @@ Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per ag
 - `start.sh`: launches tmux-backed agent loops
 - `agent-loop.sh`: per-agent run loop that executes the prompt, captures run artifacts, and records summary/metrics
 - `with-lock.sh`: scoped lock wrapper for commands that must serialize shared git integration operations
+- `merge-primary-main.sh`: deterministic preflight + merge/push helper for integrating source branch into primary repo target branch
 - `status.sh`: displays sessions, worktrees, queue snapshots, logs, and metrics
 - `stop.sh`: stops active agent sessions
 - `AGENT_PROMPT.md`: agent instruction contract used by `agent-loop.sh`
@@ -69,13 +72,7 @@ For agent-owned integration flows, wrap merge/push critical sections in `with-lo
 
 ```bash
 scripts/orca/with-lock.sh --scope merge --timeout 120 -- \
-  bash -lc '
-    git fetch origin main
-    git checkout main
-    git pull --ff-only origin main
-    git merge --no-ff "$(git branch --show-current)"
-    git push origin main
-  '
+  scripts/orca/merge-primary-main.sh
 ```
 
 Notes:
@@ -83,7 +80,8 @@ Notes:
 1. default scope is `merge`
 2. default lock file for `merge` scope is `<git-common-dir>/orca-global.lock`
 3. non-default scopes use `<git-common-dir>/orca-global-<scope>.lock`
-4. keep all shared-target write steps in one lock invocation
+4. `merge-primary-main.sh` fails fast if `ORCA_PRIMARY_REPO` is dirty to avoid nondeterministic checkout/merge behavior
+5. keep all shared-target write steps in one lock invocation
 
 ## Run Summary JSON Contract
 

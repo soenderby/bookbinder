@@ -107,6 +107,15 @@ Agent does:
 5. close issues
 6. record discoveries and summary JSON
 
+Recommended merge primitive:
+
+```bash
+scripts/orca/with-lock.sh --scope merge --timeout 120 -- \
+  scripts/orca/merge-primary-main.sh
+```
+
+`merge-primary-main.sh` performs clean-repo preflight against `ORCA_PRIMARY_REPO` and aborts early if local changes would make integration nondeterministic.
+
 ## Operating Playbook
 
 ### Daily Start

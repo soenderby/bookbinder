@@ -15,6 +15,7 @@ Commands:
   status
   setup-worktrees [count]
   with-lock [--scope NAME] [--timeout SECONDS] -- <command> [args...]
+  merge-primary-main [--repo PATH] [--source-branch NAME] [--target-branch NAME] [--remote NAME]
 USAGE
 }
 
@@ -38,6 +39,9 @@ case "${subcommand}" in
     ;;
   with-lock|lock)
     exec "${SCRIPT_DIR}/with-lock.sh" "$@"
+    ;;
+  merge-primary-main)
+    exec "${SCRIPT_DIR}/merge-primary-main.sh" "$@"
     ;;
   help|-h|--help|"")
     usage
