@@ -76,7 +76,7 @@ Use this pattern for shared-target writes:
 
 ```bash
 scripts/orca/with-lock.sh --scope merge --timeout 120 -- \
-  scripts/orca/merge-primary-main.sh
+  bash scripts/orca/merge-primary-main.sh
 ```
 
 If upstream is missing for your branch:

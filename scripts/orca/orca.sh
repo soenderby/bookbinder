@@ -41,7 +41,7 @@ case "${subcommand}" in
     exec "${SCRIPT_DIR}/with-lock.sh" "$@"
     ;;
   merge-primary-main)
-    exec "${SCRIPT_DIR}/merge-primary-main.sh" "$@"
+    exec bash "${SCRIPT_DIR}/merge-primary-main.sh" "$@"
     ;;
   help|-h|--help|"")
     usage

@@ -72,7 +72,7 @@ For agent-owned integration flows, wrap merge/push critical sections in `with-lo
 
 ```bash
 scripts/orca/with-lock.sh --scope merge --timeout 120 -- \
-  scripts/orca/merge-primary-main.sh
+  bash scripts/orca/merge-primary-main.sh
 ```
 
 Notes:
