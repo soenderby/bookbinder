@@ -84,9 +84,16 @@ Use this pattern for shared-target writes:
     set -euo pipefail
     repo="${ORCA_PRIMARY_REPO}"
     src_branch="$(git branch --show-current)"
+    primary_branch="$(git -C "$repo" branch --show-current)"
+    if [[ "$primary_branch" != "main" ]]; then
+      echo "[merge-precheck] expected primary repo on main, found: ${primary_branch}" >&2
+      echo "[merge-precheck] fix by checking out main in ${repo} before retrying" >&2
+      exit 1
+    fi
     if ! git -C "$repo" diff --quiet || ! git -C "$repo" diff --cached --quiet; then
-      echo "[merge-precheck] primary repo has uncommitted changes; aborting before merge" >&2
+      echo "[merge-precheck] primary repo has uncommitted changes; aborting before fetch/merge" >&2
       git -C "$repo" status --short >&2
+      echo "[merge-precheck] stash/commit/discard changes in ${repo}, then rerun merge block" >&2
       exit 1
     fi
     git -C "$repo" fetch origin main "$src_branch"

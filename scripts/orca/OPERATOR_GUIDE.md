@@ -168,6 +168,7 @@ Scale down cleanly:
 3. Merge/push failures:
    - agent-owned; inspect logs and issue notes, then restart sessions as needed
    - ensure lock-guarded merge scripts use `set -euo pipefail` so early command failures cannot be masked
+   - require a pre-merge cleanliness check on `ORCA_PRIMARY_REPO` (`git diff --quiet` and `git diff --cached --quiet`) so dirty `main` fails before fetch/merge
 4. Immediate agent command failures:
    - verify CLI auth/config and `AGENT_COMMAND`
 
