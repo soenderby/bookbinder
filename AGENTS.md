@@ -12,6 +12,13 @@ bd close <id>         # Complete work
 bd sync               # Sync with git
 ```
 
+## Beads Storage Notes
+
+- This repo uses the default Dolt backend (`.beads/metadata.json` reports `backend: dolt`).
+- Source-of-truth issue data lives in `.beads/dolt` in the primary repo checkout.
+- Git worktrees keep local `.beads` scaffolding and a `redirect` file pointing to the primary repo's `.beads`.
+- `.beads/issues.jsonl` is an export/import compatibility file and may be empty; it is not the primary database in this repo.
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
@@ -37,4 +44,3 @@ bd sync               # Sync with git
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
-
