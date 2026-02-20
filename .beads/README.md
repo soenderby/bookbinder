@@ -33,7 +33,7 @@ bd sync
 ### Working with Issues
 
 Issues in Beads are:
-- **Git-native**: Stored in `.beads/issues.jsonl` and synced like code
+- **Git-native**: In this repo, source-of-truth is Dolt data under `.beads/dolt` (with optional JSONL export/import compatibility files)
 - **AI-friendly**: CLI-first design works perfectly with AI coding agents
 - **Branch-aware**: Issues can follow your branch workflow
 - **Always in sync**: Auto-syncs with your commits

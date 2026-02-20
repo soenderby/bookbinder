@@ -12,6 +12,13 @@ bd close <id>         # Complete work
 bd sync               # Sync with git
 ```
 
+## Beads Storage Notes
+
+- This repo uses the default Dolt backend (`.beads/metadata.json` reports `backend: dolt`).
+- Source-of-truth issue data lives in `.beads/dolt` in the primary repo checkout.
+- Git worktrees keep local `.beads` scaffolding and a `redirect` file pointing to the primary repo's `.beads`.
+- `.beads/issues.jsonl` is an export/import compatibility file and may be empty; it is not the primary database in this repo.
+
 ## Worker Bootstrap Check
 
 Before running quality gates in a worktree, verify imports resolve to the active checkout:
