@@ -131,6 +131,41 @@ def test_reject_non_pdf_upload(tmp_path: Path) -> None:
     assert "Only .pdf uploads are supported." in response.text
 
 
+def test_reject_missing_upload(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/impose",
+        data={
+            "paper_size": "A4",
+            "signature_length": "6",
+            "flyleafs": "0",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Upload a PDF file to continue." in response.text
+
+
+def test_reject_empty_pdf_upload(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/impose",
+        data={
+            "paper_size": "A4",
+            "signature_length": "6",
+            "flyleafs": "0",
+        },
+        files={"file": ("empty.pdf", b"", "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    assert "The uploaded file is empty." in response.text
+
+
 def test_reject_encrypted_pdf_upload(tmp_path: Path) -> None:
     app = create_app(artifact_dir=tmp_path)
     client = TestClient(app)
