@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 from starlette.datastructures import UploadFile
 
 from bookbinder.web.app import (
@@ -43,6 +43,8 @@ def _default_options() -> ImpositionOptions:
         signature_length=6,
         flyleafs=0,
         duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
     )
     assert error is None
     return options
@@ -84,6 +86,35 @@ def test_upload_generate_and_download(tmp_path: Path) -> None:
     assert resolved.suffix.lower() == ".pdf"
 
 
+def test_upload_generate_with_custom_dimensions(tmp_path: Path) -> None:
+    options, _, error = _parse_form_input(
+        paper_size="Custom",
+        signature_length=6,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="210",
+        custom_height_mm="297",
+    )
+    assert error is None
+
+    result, impose_error = _impose_payload(
+        payload=_pdf_bytes(9),
+        source_name="input.pdf",
+        options=options,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
+
+    assert impose_error is None
+    assert result is not None
+    request_id, filename = _request_parts(result["download_url"])
+    generated_path = _resolve_request_artifact_path(tmp_path, request_id, filename)
+    generated_reader = PdfReader(generated_path)
+    first_page = generated_reader.pages[0]
+    assert float(first_page.mediabox.width) == pytest.approx(595.2756, abs=0.2)
+    assert float(first_page.mediabox.height) == pytest.approx(841.8898, abs=0.2)
+
+
 def test_health_endpoint_contract(tmp_path: Path) -> None:
     app = create_app(artifact_dir=tmp_path)
     client = TestClient(app)
@@ -107,6 +138,10 @@ def test_index_form_contains_required_mvp_controls(tmp_path: Path) -> None:
     assert 'name="paper_size"' in html
     assert 'id="signature_length"' in html
     assert 'name="signature_length"' in html
+    assert 'id="custom_width_mm"' in html
+    assert 'name="custom_width_mm"' in html
+    assert 'id="custom_height_mm"' in html
+    assert 'name="custom_height_mm"' in html
     assert 'id="flyleafs"' in html
     assert 'name="flyleafs"' in html
     assert 'id="duplex_rotate"' in html
@@ -114,6 +149,8 @@ def test_index_form_contains_required_mvp_controls(tmp_path: Path) -> None:
     assert 'type="submit"' in html
     assert 'bookbinder.form.v1' in html
     assert '{ id: "paper_size", kind: "value" }' in html
+    assert '{ id: "custom_width_mm", kind: "value" }' in html
+    assert '{ id: "custom_height_mm", kind: "value" }' in html
     assert '{ id: "signature_length", kind: "value" }' in html
     assert '{ id: "flyleafs", kind: "value" }' in html
     assert '{ id: "duplex_rotate", kind: "checked" }' in html
@@ -300,10 +337,52 @@ def test_reject_encrypted_pdf_upload(tmp_path: Path) -> None:
 
 def test_parse_form_input_rejects_invalid_paper_size() -> None:
     _, form_values, error = _parse_form_input(
-        paper_size="Tabloid",
+        paper_size="Unknown",
         signature_length=6,
         flyleafs=0,
         duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
     )
-    assert form_values["paper_size"] == "Tabloid"
-    assert error == "Invalid paper size. Choose A4 or Letter."
+    assert form_values["paper_size"] == "Unknown"
+    assert error is not None
+    assert "Invalid paper size." in error
+
+
+def test_parse_form_input_requires_numeric_custom_dimensions() -> None:
+    _, _, error = _parse_form_input(
+        paper_size="Custom",
+        signature_length=6,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="abc",
+        custom_height_mm="210",
+    )
+    assert error == "Custom paper dimensions must be numeric values in millimeters."
+
+
+def test_parse_form_input_rejects_non_positive_custom_dimensions() -> None:
+    _, _, error = _parse_form_input(
+        paper_size="Custom",
+        signature_length=6,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="0",
+        custom_height_mm="-1",
+    )
+    assert error == "Custom paper dimensions must be greater than 0 mm."
+
+
+def test_parse_form_input_accepts_valid_custom_dimensions() -> None:
+    options, form_values, error = _parse_form_input(
+        paper_size="Custom",
+        signature_length=6,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="210",
+        custom_height_mm="297",
+    )
+    assert error is None
+    assert form_values["paper_size"] == "Custom"
+    assert options.custom_width_points == pytest.approx(595.2756, abs=0.2)
+    assert options.custom_height_points == pytest.approx(841.8898, abs=0.2)

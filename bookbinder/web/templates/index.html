@@ -21,6 +21,13 @@
           <option value="{{ size }}" {{ "selected" if form.paper_size == size else "" }}>{{ size }}</option>
           {% endfor %}
         </select>
+        <p class="hint">Choose "Custom" to provide width and height in millimeters.</p>
+
+        <label for="custom_width_mm">Custom width (mm)</label>
+        <input id="custom_width_mm" name="custom_width_mm" type="number" min="0.1" step="any" value="{{ form.custom_width_mm }}" />
+
+        <label for="custom_height_mm">Custom height (mm)</label>
+        <input id="custom_height_mm" name="custom_height_mm" type="number" min="0.1" step="any" value="{{ form.custom_height_mm }}" />
 
         <label for="signature_length">Signature length (sheets)</label>
         <input id="signature_length" name="signature_length" type="number" min="1" value="{{ form.signature_length }}" required />
@@ -57,6 +64,8 @@
         const storageKey = "bookbinder.form.v1";
         const fields = [
           { id: "paper_size", kind: "value" },
+          { id: "custom_width_mm", kind: "value" },
+          { id: "custom_height_mm", kind: "value" },
           { id: "signature_length", kind: "value" },
           { id: "flyleafs", kind: "value" },
           { id: "duplex_rotate", kind: "checked" },

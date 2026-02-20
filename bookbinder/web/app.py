@@ -29,6 +29,8 @@ from bookbinder.imposition.pdf_writer import (
 
 _REQUEST_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 _EXPIRED_ARTIFACT_MESSAGE = "This download link has expired after cleanup. Regenerate the PDF to create a new link."
+_CUSTOM_PAPER_SIZE = "Custom"
+_POINTS_PER_MM = 72.0 / 25.4
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,8 @@ class ImpositionOptions:
     signature_length: int
     flyleafs: int
     duplex_rotate: bool
+    custom_width_points: float | None
+    custom_height_points: float | None
 
 
 def _cleanup_stale_artifacts(
@@ -81,22 +85,54 @@ def _parse_form_input(
     signature_length: int,
     flyleafs: int,
     duplex_rotate: bool,
+    custom_width_mm: str,
+    custom_height_mm: str,
 ) -> tuple[ImpositionOptions, dict[str, Any], str | None]:
+    normalized_paper_size = paper_size.strip()
+    width_mm_value = custom_width_mm.strip()
+    height_mm_value = custom_height_mm.strip()
+
     options = ImpositionOptions(
-        paper_size=paper_size,
+        paper_size=normalized_paper_size,
         signature_length=signature_length,
         flyleafs=flyleafs,
         duplex_rotate=duplex_rotate,
+        custom_width_points=None,
+        custom_height_points=None,
     )
     form_values: dict[str, Any] = {
         "paper_size": options.paper_size,
         "signature_length": options.signature_length,
         "flyleafs": options.flyleafs,
         "duplex_rotate": options.duplex_rotate,
+        "custom_width_mm": width_mm_value,
+        "custom_height_mm": height_mm_value,
     }
 
-    if options.paper_size not in PAPER_SIZES:
-        return options, form_values, "Invalid paper size. Choose A4 or Letter."
+    allowed_sizes = set(PAPER_SIZES)
+    allowed_sizes.add(_CUSTOM_PAPER_SIZE)
+    if options.paper_size not in allowed_sizes:
+        valid_sizes = ", ".join(sorted(allowed_sizes))
+        return options, form_values, f"Invalid paper size. Choose one of: {valid_sizes}."
+
+    if options.paper_size == _CUSTOM_PAPER_SIZE:
+        try:
+            width_mm = float(width_mm_value)
+            height_mm = float(height_mm_value)
+        except ValueError:
+            return options, form_values, "Custom paper dimensions must be numeric values in millimeters."
+
+        if width_mm <= 0 or height_mm <= 0:
+            return options, form_values, "Custom paper dimensions must be greater than 0 mm."
+
+        options = ImpositionOptions(
+            paper_size=options.paper_size,
+            signature_length=options.signature_length,
+            flyleafs=options.flyleafs,
+            duplex_rotate=options.duplex_rotate,
+            custom_width_points=width_mm * _POINTS_PER_MM,
+            custom_height_points=height_mm * _POINTS_PER_MM,
+        )
 
     return options, form_values, None
 
@@ -150,6 +186,11 @@ def _impose_payload(
         output_path=output_path,
         paper_size=options.paper_size,
         duplex_rotate=options.duplex_rotate,
+        custom_dimensions=(
+            None
+            if options.custom_width_points is None or options.custom_height_points is None
+            else (options.custom_width_points, options.custom_height_points)
+        ),
     )
 
     return {
@@ -216,6 +257,8 @@ def create_app(
             "signature_length": 6,
             "flyleafs": 0,
             "duplex_rotate": False,
+            "custom_width_mm": "",
+            "custom_height_mm": "",
         }
         if form_values:
             defaults.update(form_values)
@@ -225,7 +268,7 @@ def create_app(
             name="index.html",
             context={
                 "result": result,
-                "paper_sizes": sorted(PAPER_SIZES.keys()),
+                "paper_sizes": sorted(PAPER_SIZES.keys()) + [_CUSTOM_PAPER_SIZE],
                 "form": defaults,
             },
             status_code=status_code,
@@ -247,12 +290,16 @@ def create_app(
         signature_length: int = Form(6, ge=1),
         flyleafs: int = Form(0, ge=0),
         duplex_rotate: bool = Form(False),
+        custom_width_mm: str = Form(""),
+        custom_height_mm: str = Form(""),
     ) -> HTMLResponse:
         options, form_values, form_error = _parse_form_input(
             paper_size=paper_size,
             signature_length=signature_length,
             flyleafs=flyleafs,
             duplex_rotate=duplex_rotate,
+            custom_width_mm=custom_width_mm,
+            custom_height_mm=custom_height_mm,
         )
         if form_error is not None:
             return render_index(

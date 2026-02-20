@@ -81,9 +81,13 @@ def write_duplex_aggregated_pdf(
     output_path: Path,
     paper_size: str,
     duplex_rotate: bool,
+    custom_dimensions: tuple[float, float] | None = None,
     blank_token: str = BLANK_PAGE,
 ) -> GeneratedArtifact:
-    output_width, output_height = resolve_paper_dimensions(paper_size)
+    if custom_dimensions is not None:
+        output_width, output_height = custom_dimensions
+    else:
+        output_width, output_height = resolve_paper_dimensions(paper_size)
 
     writer = PdfWriter()
     placed_tokens: list[tuple[PageToken, PageToken]] = []
