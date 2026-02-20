@@ -110,6 +110,7 @@ RUN_SUMMARY_DISCOVERY_COUNT=""
 RUN_SUMMARY_DISCOVERY_IDS=""
 RUN_TOKENS_USED=""
 RUN_TOKENS_PARSE_STATUS="missing"
+RUN_BRANCH_NAME=""
 
 log() {
   local line
@@ -128,7 +129,7 @@ now_epoch() {
 
 start_run_artifacts() {
   RUN_NUMBER=$((runs_completed + 1))
-  RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%S%NZ)"
   RUN_BASE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}-run-${RUN_NUMBER}-${RUN_TIMESTAMP}"
   LOGFILE="${RUN_BASE}.log"
   SUMMARY_FILE="${RUN_BASE}-summary.md"
@@ -153,6 +154,7 @@ start_run_artifacts() {
   RUN_SUMMARY_DISCOVERY_IDS=""
   RUN_TOKENS_USED=""
   RUN_TOKENS_PARSE_STATUS="missing"
+  RUN_BRANCH_NAME=""
 
   log "starting run ${RUN_NUMBER}"
   log "session id: ${AGENT_SESSION_ID}"
@@ -162,6 +164,58 @@ start_run_artifacts() {
   log "discovery log path: ${DISCOVERY_LOG_FILE}"
   log "primary repo path: ${PRIMARY_REPO}"
   log "lock helper path: ${LOCK_HELPER_PATH}"
+}
+
+select_run_base_ref() {
+  if git show-ref --verify --quiet refs/remotes/origin/main; then
+    printf '%s\n' "origin/main"
+    return 0
+  fi
+
+  if git show-ref --verify --quiet refs/heads/main; then
+    printf '%s\n' "main"
+    return 0
+  fi
+
+  return 1
+}
+
+prepare_run_branch() {
+  local base_ref
+
+  if git remote get-url origin >/dev/null 2>&1; then
+    if ! git fetch --quiet origin main; then
+      log "warning: failed to fetch origin/main; using local refs"
+    fi
+  fi
+
+  if ! base_ref="$(select_run_base_ref)"; then
+    log "fatal: unable to determine base ref (expected origin/main or main)"
+    return 1
+  fi
+
+  RUN_BRANCH_NAME="swarm/${AGENT_NAME}/${AGENT_SESSION_ID}/run-${RUN_NUMBER}-${RUN_TIMESTAMP}"
+  if ! [[ "${RUN_BRANCH_NAME}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    log "fatal: generated invalid run branch name: ${RUN_BRANCH_NAME}"
+    return 1
+  fi
+
+  if git show-ref --verify --quiet "refs/heads/${RUN_BRANCH_NAME}"; then
+    log "fatal: run branch already exists locally: ${RUN_BRANCH_NAME}"
+    return 1
+  fi
+
+  if git show-ref --verify --quiet "refs/remotes/origin/${RUN_BRANCH_NAME}"; then
+    log "fatal: run branch already exists on origin: ${RUN_BRANCH_NAME}"
+    return 1
+  fi
+
+  if ! git checkout -b "${RUN_BRANCH_NAME}" "${base_ref}" >/dev/null 2>&1; then
+    log "fatal: failed to create run branch ${RUN_BRANCH_NAME} from ${base_ref}"
+    return 1
+  fi
+
+  log "prepared run branch: ${RUN_BRANCH_NAME} (base: ${base_ref})"
 }
 
 build_agent_command_for_run() {
@@ -502,6 +556,20 @@ while true; do
   fi
 
   start_run_artifacts
+  if ! prepare_run_branch; then
+    RUN_EXIT_CODE=1
+    RUN_DURATION_SECONDS=0
+    RUN_SUMMARY_PARSE_STATUS="missing"
+    RUN_SUMMARY_RESULT="failed"
+    RUN_SUMMARY_LOOP_ACTION="stop"
+    RUN_SUMMARY_LOOP_ACTION_REASON="run-branch-setup-failed"
+    RUN_REASON="run-branch-setup-failed"
+    RUN_RESULT="failed"
+    finalize_run_observability
+    runs_completed=$((runs_completed + 1))
+    log "completed run ${runs_completed} with branch setup failure"
+    break
+  fi
 
   prompt_file="$(mktemp)"
   write_prompt_file "${prompt_file}"
