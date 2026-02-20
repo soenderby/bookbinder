@@ -49,7 +49,8 @@ Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per ag
 Each iteration follows this flow:
 
 1. Pre-sync guardrail: verify expected branch and clean worktree (`git status --porcelain` empty).
-2. Sync: run `git pull --rebase --autostash` then `bd sync`; if either fails, stop the loop.
+2. Sync: run `git pull --rebase --autostash` then `bd sync`; retry bounded times on failure and continue loop with backoff if sync is still unavailable.
+   - if pull fails because upstream ref is missing, the loop tries `git push -u` to restore the worker branch upstream.
 3. Poll queue: call `bd ready --json` with bounded retries and backoff.
 4. Claim work: attempt atomic claim via `bd update <id> --claim`; if claim race is lost, retry later.
 5. Run agent: render `AGENT_PROMPT.md` placeholders and run `AGENT_COMMAND`, logging to a per-run file.
@@ -57,7 +58,7 @@ Each iteration follows this flow:
    - merge step requires the agent run HEAD commit to be present on `origin/swarm/agent-N` before integration.
 7. Close issue after merge: close the bead only if merge succeeded (legacy prompt behavior where the issue is already closed is tolerated).
 8. Post-sync guardrail: re-run the same fail-fast sync path as step 2.
-9. Exit conditions: no ready issues, `MAX_RUNS` reached, or hard guard/sync/merge failure.
+9. Exit conditions: no ready issues, `MAX_RUNS` reached, or hard guard/merge-finalization failure.
 
 ## Validation and Safety Checks
 
@@ -94,10 +95,11 @@ Input/env validation before loop:
 1. `WORKTREE` is required and must be a valid git worktree
 2. `MAX_RUNS` must be non-negative integer
 3. `READY_MAX_ATTEMPTS` / `READY_RETRY_SECONDS` must be positive integers
-4. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+`
-5. `MERGE_SCRIPT` must exist and be executable
-6. `ORCA_MERGE_LOCK_TIMEOUT_SECONDS` / `ORCA_MERGE_MAX_ATTEMPTS` must be positive integers
-7. expected branch is captured at startup and must remain stable
+4. `SYNC_MAX_ATTEMPTS` / `SYNC_RETRY_SECONDS` must be positive integers
+5. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+`
+6. `MERGE_SCRIPT` must exist and be executable
+7. `ORCA_MERGE_LOCK_TIMEOUT_SECONDS` / `ORCA_MERGE_MAX_ATTEMPTS` must be positive integers
+8. expected branch is captured at startup and must remain stable
 
 Signal and interruption handling:
 
@@ -127,8 +129,8 @@ Shutdown behavior:
 
 The scripts intentionally split failures into two categories:
 
-1. Hard-stop failures (loop exits): dirty worktree at guard checkpoints, unfixable branch drift, failed `git pull --rebase --autostash`, failed `bd sync`, merge conflict/failure, or close-after-merge failure.
-2. Recoverable/transient failures (loop continues): transient `bd ready --json` failure (bounded retries), claim race on `--claim`, or temporary failure returning issue to open (retries, then manual-intervention warning).
+1. Hard-stop failures (loop exits): dirty worktree at guard checkpoints, unfixable branch drift, merge conflict/failure, or close-after-merge failure.
+2. Recoverable/transient failures (loop continues): transient `bd ready --json` failure (bounded retries), sync failures (`git pull`/`bd sync`) after bounded retries, claim race on `--claim`, or temporary failure returning issue to open (retries, then manual-intervention warning).
 
 Issue release retry policy:
 
@@ -137,6 +139,10 @@ Issue release retry policy:
 3. persistent failure is logged as manual-intervention-needed
 
 ## Logs and Traceability
+
+Session logs are written to:
+
+`agent-logs/<agent-name>-<session-id>.log`
 
 Per-run logs are written to:
 
@@ -159,6 +165,8 @@ This gives a full timeline for debugging queue behavior and git-state issues.
 - `AGENT_REASONING_LEVEL`: value passed as `model_reasoning_effort` for default codex command
 - `READY_MAX_ATTEMPTS`: retries for `bd ready --json` polling (default: `5`)
 - `READY_RETRY_SECONDS`: seconds between ready polling retries (default: `3`)
+- `SYNC_MAX_ATTEMPTS`: retries for sync stage (`git pull` + `bd sync`) before loop backoff (default: `3`)
+- `SYNC_RETRY_SECONDS`: seconds between sync retries/backoff (default: `5`)
 - `SESSION_PREFIX`: tmux session prefix (default: `bb-agent`)
 - `PROMPT_TEMPLATE`: path to prompt template (default: `scripts/orca/AGENT_PROMPT.md`)
 - `AGENT_COMMAND`: full command used for each agent pass (default: `codex exec ...`)

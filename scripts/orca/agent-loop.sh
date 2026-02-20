@@ -31,6 +31,8 @@ MERGE_SCRIPT="${MERGE_SCRIPT:-${ROOT}/scripts/orca/merge-after-run.sh}"
 MAX_RUNS="${MAX_RUNS:-0}"
 READY_MAX_ATTEMPTS="${READY_MAX_ATTEMPTS:-5}"
 READY_RETRY_SECONDS="${READY_RETRY_SECONDS:-3}"
+SYNC_MAX_ATTEMPTS="${SYNC_MAX_ATTEMPTS:-3}"
+SYNC_RETRY_SECONDS="${SYNC_RETRY_SECONDS:-5}"
 ORCA_MERGE_REMOTE="${ORCA_MERGE_REMOTE:-origin}"
 ORCA_MERGE_TARGET_BRANCH="${ORCA_MERGE_TARGET_BRANCH:-main}"
 ORCA_MERGE_LOCK_TIMEOUT_SECONDS="${ORCA_MERGE_LOCK_TIMEOUT_SECONDS:-120}"
@@ -48,6 +50,16 @@ fi
 
 if ! [[ "${READY_RETRY_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "READY_RETRY_SECONDS must be a positive integer: ${READY_RETRY_SECONDS}"
+  exit 1
+fi
+
+if ! [[ "${SYNC_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "SYNC_MAX_ATTEMPTS must be a positive integer: ${SYNC_MAX_ATTEMPTS}"
+  exit 1
+fi
+
+if ! [[ "${SYNC_RETRY_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "SYNC_RETRY_SECONDS must be a positive integer: ${SYNC_RETRY_SECONDS}"
   exit 1
 fi
 
@@ -79,12 +91,15 @@ EXPECTED_BRANCH=""
 
 mkdir -p "${ROOT}/agent-logs"
 LOGFILE=""
+SESSION_LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}.log"
+: > "${SESSION_LOGFILE}"
 
 log() {
   local line
   line="$(printf '[%s] [%s] %s\n' "$(date -Iseconds)" "${AGENT_NAME}" "$*")"
+  printf '%s\n' "${line}" >> "${SESSION_LOGFILE}"
   if [[ -n "${LOGFILE}" ]]; then
-    printf '%s\n' "${line}" | tee -a "${LOGFILE}"
+    printf '%s\n' "${line}" | tee -a "${LOGFILE}" >&2
   else
     printf '%s\n' "${line}" >&2
   fi
@@ -182,6 +197,39 @@ abort_rebase_if_needed() {
       log "failed to abort in-progress rebase after git pull failure"
     fi
   fi
+}
+
+log_multiline_output() {
+  local prefix="$1"
+  local output="$2"
+  local line
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    log "${prefix}: ${line}"
+  done <<< "${output}"
+}
+
+recover_missing_upstream_branch_if_needed() {
+  local pull_output="$1"
+  local remote_name
+  local push_output
+
+  if [[ "${pull_output}" != *"no such ref was fetched"* ]]; then
+    return 1
+  fi
+
+  remote_name="$(git config --get "branch.${EXPECTED_BRANCH}.remote" || true)"
+  remote_name="${remote_name:-origin}"
+  log "upstream ref missing for ${EXPECTED_BRANCH}; attempting to recreate via git push -u ${remote_name} ${EXPECTED_BRANCH}"
+
+  if push_output="$(git push -u "${remote_name}" "${EXPECTED_BRANCH}" 2>&1)"; then
+    log "recreated upstream branch for ${EXPECTED_BRANCH} on ${remote_name}"
+    return 0
+  fi
+
+  log "failed to recreate upstream branch for ${EXPECTED_BRANCH}"
+  log_multiline_output "git push -u" "${push_output}"
+  return 1
 }
 
 require_clean_worktree_or_exit() {
@@ -358,21 +406,45 @@ merge_issue_or_return_to_open() {
 
 sync_with_remote_or_exit() {
   local context="$1"
+  local attempts=1
+  local pull_output
+  local sync_output
 
-  guard_worktree_state_or_exit "${context}:pre-sync"
+  while [[ "${attempts}" -le "${SYNC_MAX_ATTEMPTS}" ]]; do
+    guard_worktree_state_or_exit "${context}:pre-sync"
 
-  if ! git pull --rebase --autostash >/dev/null 2>&1; then
-    log "git pull --rebase --autostash failed during ${context}; stopping loop"
-    abort_rebase_if_needed
-    exit 1
-  fi
+    if ! pull_output="$(git pull --rebase --autostash 2>&1)"; then
+      log "git pull --rebase --autostash failed during ${context}; attempt ${attempts}/${SYNC_MAX_ATTEMPTS}"
+      log_multiline_output "git pull" "${pull_output}"
+      abort_rebase_if_needed
+      if recover_missing_upstream_branch_if_needed "${pull_output}"; then
+        attempts=$((attempts + 1))
+        continue
+      fi
+      if [[ "${attempts}" -lt "${SYNC_MAX_ATTEMPTS}" ]]; then
+        sleep "${SYNC_RETRY_SECONDS}"
+        attempts=$((attempts + 1))
+        continue
+      fi
+      return 1
+    fi
 
-  if ! bd sync >/dev/null 2>&1; then
-    log "bd sync failed during ${context}; stopping loop"
-    exit 1
-  fi
+    if ! sync_output="$(bd sync 2>&1)"; then
+      log "bd sync failed during ${context}; attempt ${attempts}/${SYNC_MAX_ATTEMPTS}"
+      log_multiline_output "bd sync" "${sync_output}"
+      if [[ "${attempts}" -lt "${SYNC_MAX_ATTEMPTS}" ]]; then
+        sleep "${SYNC_RETRY_SECONDS}"
+        attempts=$((attempts + 1))
+        continue
+      fi
+      return 1
+    fi
 
-  guard_worktree_state_or_exit "${context}:post-sync"
+    guard_worktree_state_or_exit "${context}:post-sync"
+    return 0
+  done
+
+  return 1
 }
 
 trap cleanup_on_exit EXIT
@@ -403,7 +475,11 @@ while true; do
     break
   fi
 
-  sync_with_remote_or_exit "iteration-start"
+  if ! sync_with_remote_or_exit "iteration-start"; then
+    log "sync failed during iteration-start after ${SYNC_MAX_ATTEMPTS} attempts; continuing loop after ${SYNC_RETRY_SECONDS}s"
+    sleep "${SYNC_RETRY_SECONDS}"
+    continue
+  fi
 
   if ! issue_id="$(next_ready_issue_with_retry)"; then
     log "ready queue polling failed after ${READY_MAX_ATTEMPTS} attempts; continuing loop after backoff"
@@ -456,7 +532,10 @@ while true; do
 
   rm -f "${tmp_prompt}"
 
-  sync_with_remote_or_exit "iteration-end"
+  if ! sync_with_remote_or_exit "iteration-end"; then
+    log "sync failed during iteration-end after ${SYNC_MAX_ATTEMPTS} attempts; continuing loop after ${SYNC_RETRY_SECONDS}s"
+    sleep "${SYNC_RETRY_SECONDS}"
+  fi
 
   runs_completed=$((runs_completed + 1))
   if [[ "${MAX_RUNS}" -eq 0 ]]; then

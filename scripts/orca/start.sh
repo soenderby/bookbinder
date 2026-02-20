@@ -26,6 +26,8 @@ if [[ -n "${AGENT_COMMAND+x}" ]]; then
 fi
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
 MAX_RUNS="${MAX_RUNS:-0}"
+SYNC_MAX_ATTEMPTS="${SYNC_MAX_ATTEMPTS:-3}"
+SYNC_RETRY_SECONDS="${SYNC_RETRY_SECONDS:-5}"
 ORCA_MERGE_REMOTE="${ORCA_MERGE_REMOTE:-origin}"
 ORCA_MERGE_TARGET_BRANCH="${ORCA_MERGE_TARGET_BRANCH:-main}"
 ORCA_MERGE_LOCK_TIMEOUT_SECONDS="${ORCA_MERGE_LOCK_TIMEOUT_SECONDS:-120}"
@@ -109,6 +111,16 @@ if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+if ! [[ "${SYNC_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[start] SYNC_MAX_ATTEMPTS must be a positive integer: ${SYNC_MAX_ATTEMPTS}" >&2
+  exit 1
+fi
+
+if ! [[ "${SYNC_RETRY_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[start] SYNC_RETRY_SECONDS must be a positive integer: ${SYNC_RETRY_SECONDS}" >&2
+  exit 1
+fi
+
 if ! [[ "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "[start] ORCA_MERGE_LOCK_TIMEOUT_SECONDS must be a positive integer: ${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" >&2
   exit 1
@@ -158,7 +170,7 @@ for i in $(seq 1 "${COUNT}"); do
   fi
 
   echo "[start] launching ${session} in ${worktree}"
-  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_REASONING_LEVEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q ORCA_MERGE_REMOTE=%q ORCA_MERGE_TARGET_BRANCH=%q ORCA_MERGE_LOCK_TIMEOUT_SECONDS=%q ORCA_MERGE_MAX_ATTEMPTS=%q %q" \
+  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_REASONING_LEVEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q SYNC_MAX_ATTEMPTS=%q SYNC_RETRY_SECONDS=%q ORCA_MERGE_REMOTE=%q ORCA_MERGE_TARGET_BRANCH=%q ORCA_MERGE_LOCK_TIMEOUT_SECONDS=%q ORCA_MERGE_MAX_ATTEMPTS=%q %q" \
     "${ROOT}" \
     "agent-${i}" \
     "${session_id}" \
@@ -168,12 +180,26 @@ for i in $(seq 1 "${COUNT}"); do
     "${AGENT_COMMAND}" \
     "${PROMPT_TEMPLATE}" \
     "${MAX_RUNS}" \
+    "${SYNC_MAX_ATTEMPTS}" \
+    "${SYNC_RETRY_SECONDS}" \
     "${ORCA_MERGE_REMOTE}" \
     "${ORCA_MERGE_TARGET_BRANCH}" \
     "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" \
     "${ORCA_MERGE_MAX_ATTEMPTS}" \
     "${SCRIPT_DIR}/agent-loop.sh")"
   tmux new-session -d -s "${session}" "${tmux_cmd}"
+
+  sleep 1
+  if ! tmux has-session -t "${session}" 2>/dev/null; then
+    session_log="${ROOT}/agent-logs/agent-${i}-${session_id}.log"
+    echo "[start] warning: ${session} exited during startup" >&2
+    if [[ -f "${session_log}" ]]; then
+      echo "[start] recent startup log (${session_log}):" >&2
+      tail -n 20 "${session_log}" >&2 || true
+    else
+      echo "[start] no session log found yet; inspect agent-logs/" >&2
+    fi
+  fi
 done
 
 echo "[start] running sessions:"
