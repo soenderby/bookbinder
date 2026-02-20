@@ -106,8 +106,10 @@ if [[ -n "${REQUIRED_COMMIT}" ]] && ! git rev-parse --verify --quiet "${REQUIRED
   exit 1
 fi
 
-ROOT="$(git rev-parse --show-toplevel)"
-LOCK_FILE="${ROOT}/.git/orca-merge.lock"
+COMMON_GIT_DIR="$(git rev-parse --git-common-dir)"
+COMMON_GIT_DIR="$(cd "${COMMON_GIT_DIR}" && pwd)"
+ROOT="$(cd "${COMMON_GIT_DIR}/.." && pwd)"
+LOCK_FILE="${COMMON_GIT_DIR}/orca-merge.lock"
 WORKTREE_ROOT="${ROOT}/worktrees"
 TMP_WORKTREE=""
 
