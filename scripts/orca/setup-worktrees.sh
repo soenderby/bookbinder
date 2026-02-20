@@ -70,7 +70,7 @@ for i in $(seq 1 "${COUNT}"); do
   name="agent-${i}"
   rel_path="worktrees/${name}"
   abs_path="${ROOT}/${rel_path}"
-  branch="swarm/${name}"
+  branch="swarm/${name}/bootstrap"
 
   if git worktree list --porcelain | awk '/^worktree / {print $2}' | grep -Fxq "${abs_path}"; then
     echo "[setup] ${rel_path} already exists"
