@@ -24,10 +24,12 @@ Orca intentionally keeps documentation to three markdown files in this directory
 - `status`
 - `setup-worktrees [count]`
 - `with-lock [--scope NAME] [--timeout SECONDS] -- <command> [args...]`
+- `check-closed-deps-merged <issue-id> [target-ref]`
 
 Helper script (direct invocation):
 
 - `scripts/orca/with-lock.sh [--scope NAME] [--timeout SECONDS] -- <command> [args...]`
+- `scripts/orca/check-closed-deps-merged.sh <issue-id> [target-ref]`
 
 ## TODO
 
@@ -58,6 +60,7 @@ Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per ag
 - `start.sh`: launches tmux-backed agent loops
 - `agent-loop.sh`: per-agent run loop that executes the prompt, captures run artifacts, and records summary/metrics
 - `with-lock.sh`: scoped lock wrapper for commands that must serialize shared git integration operations
+- `check-closed-deps-merged.sh`: guard that verifies closed blocking dependencies for an issue are represented on integration history before claim
 - `status.sh`: displays sessions, worktrees, queue snapshots, logs, and metrics
 - `stop.sh`: stops active agent sessions
 - `AGENT_PROMPT.md`: agent instruction contract used by `agent-loop.sh`
