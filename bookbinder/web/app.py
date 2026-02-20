@@ -5,9 +5,9 @@ import logging
 import re
 import shutil
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -39,6 +39,8 @@ _LOGGER = logging.getLogger("bookbinder.web")
 _PREVIEW_ACTION = "preview"
 _GENERATE_ACTION = "generate"
 _SUPPORTED_ACTIONS = {_PREVIEW_ACTION, _GENERATE_ACTION}
+OutputMode = Literal["aggregated", "signatures", "both"]
+_OUTPUT_MODES: tuple[OutputMode, ...] = ("aggregated", "signatures", "both")
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ class ImpositionOptions:
     custom_width_points: float | None
     custom_height_points: float | None
     scaling_mode: str
+    output_mode: OutputMode
 
 
 def _log_event(level: int, event_name: str, **event_fields: Any) -> None:
@@ -108,8 +111,10 @@ def _parse_form_input(
     custom_width_mm: str,
     custom_height_mm: str,
     scaling_mode: str,
+    output_mode: str,
 ) -> tuple[ImpositionOptions, dict[str, Any], str | None]:
     normalized_paper_size = paper_size.strip()
+    normalized_output_mode = output_mode.strip().lower()
     width_mm_value = custom_width_mm.strip()
     height_mm_value = custom_height_mm.strip()
 
@@ -121,6 +126,7 @@ def _parse_form_input(
         custom_width_points=None,
         custom_height_points=None,
         scaling_mode=scaling_mode,
+        output_mode="aggregated",
     )
     form_values: dict[str, Any] = {
         "paper_size": options.paper_size,
@@ -130,6 +136,7 @@ def _parse_form_input(
         "custom_width_mm": width_mm_value,
         "custom_height_mm": height_mm_value,
         "scaling_mode": options.scaling_mode,
+        "output_mode": normalized_output_mode,
     }
 
     allowed_sizes = set(PAPER_SIZES)
@@ -139,6 +146,20 @@ def _parse_form_input(
         return options, form_values, f"Invalid paper size. Choose one of: {valid_sizes}."
     if options.scaling_mode not in _SCALING_MODES:
         return options, form_values, "Invalid scaling mode. Choose proportional, stretch, or original."
+    if normalized_output_mode not in _OUTPUT_MODES:
+        valid_modes = ", ".join(_OUTPUT_MODES)
+        return options, form_values, f"Invalid output mode. Choose one of: {valid_modes}."
+
+    options = ImpositionOptions(
+        paper_size=options.paper_size,
+        signature_length=options.signature_length,
+        flyleafs=options.flyleafs,
+        duplex_rotate=options.duplex_rotate,
+        custom_width_points=options.custom_width_points,
+        custom_height_points=options.custom_height_points,
+        scaling_mode=options.scaling_mode,
+        output_mode=normalized_output_mode,
+    )
 
     if options.paper_size == _CUSTOM_PAPER_SIZE:
         try:
@@ -158,6 +179,7 @@ def _parse_form_input(
             custom_width_points=width_mm * _POINTS_PER_MM,
             custom_height_points=height_mm * _POINTS_PER_MM,
             scaling_mode=options.scaling_mode,
+            output_mode=options.output_mode,
         )
 
     return options, form_values, None
@@ -216,6 +238,7 @@ def _impose_payload(
     request_artifact_dir = artifact_dir / request_id
     output_name = deterministic_output_filename(source_name)
     output_path = request_artifact_dir / output_name
+    output_slug = Path(output_name).stem.removesuffix("_imposed_duplex")
     preview_name = deterministic_preview_filename(source_name)
     preview_path = request_artifact_dir / preview_name
     custom_dimensions = (
@@ -234,15 +257,49 @@ def _impose_payload(
             custom_dimensions=custom_dimensions,
             scaling_mode=options.scaling_mode,
         )
-        artifact = write_duplex_aggregated_pdf(
-            reader,
-            signatures=signatures,
-            output_path=output_path,
-            paper_size=options.paper_size,
-            duplex_rotate=options.duplex_rotate,
-            custom_dimensions=custom_dimensions,
-            scaling_mode=options.scaling_mode,
-        )
+        generated_downloads: list[dict[str, Any]] = []
+        total_output_pages = 0
+
+        if options.output_mode in ("aggregated", "both"):
+            artifact = write_duplex_aggregated_pdf(
+                reader,
+                signatures=signatures,
+                output_path=output_path,
+                paper_size=options.paper_size,
+                duplex_rotate=options.duplex_rotate,
+                custom_dimensions=custom_dimensions,
+                scaling_mode=options.scaling_mode,
+            )
+            generated_downloads.append(
+                {
+                    "download_url": f"/download/{request_id}/{output_name}",
+                    "output_filename": output_name,
+                    "output_pages": artifact.page_count,
+                }
+            )
+            total_output_pages += artifact.page_count
+
+        if options.output_mode in ("signatures", "both"):
+            for signature_index, signature in enumerate(signatures):
+                signature_name = f"{output_slug}_signature{signature_index}_duplex.pdf"
+                signature_path = request_artifact_dir / signature_name
+                artifact = write_duplex_aggregated_pdf(
+                    reader,
+                    signatures=[list(signature)],
+                    output_path=signature_path,
+                    paper_size=options.paper_size,
+                    duplex_rotate=options.duplex_rotate,
+                    custom_dimensions=custom_dimensions,
+                    scaling_mode=options.scaling_mode,
+                )
+                generated_downloads.append(
+                    {
+                        "download_url": f"/download/{request_id}/{signature_name}",
+                        "output_filename": signature_name,
+                        "output_pages": artifact.page_count,
+                    }
+                )
+                total_output_pages += artifact.page_count
     except ValueError as exc:
         _log_event(
             logging.WARNING,
@@ -269,18 +326,25 @@ def _impose_payload(
         request_id=request_id,
         source_name=source_name,
         source_pages=len(source_pages),
-        output_pages=artifact.page_count,
+        output_pages=total_output_pages,
         signatures=len(signatures),
+        output_mode=options.output_mode,
+        output_artifacts=len(generated_downloads),
         stale_artifacts_removed=removed,
     )
+
+    first_output = generated_downloads[0]
 
     return {
         "status": "success",
         "mode": _GENERATE_ACTION,
+        "output_mode": options.output_mode,
         "message": "Imposition complete.",
-        "download_url": f"/download/{request_id}/{output_name}",
-        "output_filename": output_name,
-        "output_pages": artifact.page_count,
+        "download_url": first_output["download_url"],
+        "output_filename": first_output["output_filename"],
+        "output_pages": total_output_pages,
+        "output_count": len(generated_downloads),
+        "downloads": generated_downloads,
         "preview_download_url": f"/download/{request_id}/{preview_name}",
         "preview_filename": preview_name,
         "preview_pages": preview_artifact.page_count,
@@ -381,6 +445,7 @@ def create_app(
             "custom_width_mm": "",
             "custom_height_mm": "",
             "scaling_mode": "proportional",
+            "output_mode": "aggregated",
         }
         if form_values:
             defaults.update(form_values)
@@ -392,6 +457,7 @@ def create_app(
                 "result": result,
                 "paper_sizes": sorted(PAPER_SIZES.keys()) + [_CUSTOM_PAPER_SIZE],
                 "scaling_modes": list(_SCALING_MODES),
+                "output_modes": _OUTPUT_MODES,
                 "form": defaults,
             },
             status_code=status_code,
@@ -417,6 +483,7 @@ def create_app(
         custom_width_mm: str = Form(""),
         custom_height_mm: str = Form(""),
         scaling_mode: str = Form("proportional"),
+        output_mode: str = Form("aggregated"),
     ) -> HTMLResponse:
         job_id = uuid4().hex
         _log_event(
@@ -428,6 +495,7 @@ def create_app(
             signature_length=signature_length,
             flyleafs=flyleafs,
             duplex_rotate=duplex_rotate,
+            output_mode=output_mode,
             has_upload=file is not None and bool(file.filename),
         )
         normalized_action = action.strip().lower()
@@ -448,6 +516,7 @@ def create_app(
             custom_width_mm=custom_width_mm,
             custom_height_mm=custom_height_mm,
             scaling_mode=scaling_mode,
+            output_mode=output_mode,
         )
         if form_error is not None:
             _log_event(logging.WARNING, "impose.request.form_validation_failed", job_id=job_id, error=form_error)
@@ -478,10 +547,11 @@ def create_app(
             )
 
         payload = await file.read()
+        impose_options = options if normalized_action == _GENERATE_ACTION else replace(options, output_mode="aggregated")
         result, impose_error = _impose_payload(
             payload=payload,
             source_name=source_name,
-            options=options,
+            options=impose_options,
             artifact_dir=app.state.artifact_dir,
             artifact_retention_seconds=app.state.artifact_retention_seconds,
             job_id=job_id,

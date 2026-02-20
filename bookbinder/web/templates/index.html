@@ -47,6 +47,13 @@
           Duplex rotate
         </label>
 
+        <label for="output_mode">Output mode</label>
+        <select id="output_mode" name="output_mode">
+          {% for mode in output_modes %}
+          <option value="{{ mode }}" {{ "selected" if form.output_mode == mode else "" }}>{{ mode }}</option>
+          {% endfor %}
+        </select>
+
         <div class="actions">
           <button type="submit" name="action" value="generate">Generate</button>
           <button type="submit" name="action" value="preview">Preview first sheet</button>
@@ -59,7 +66,16 @@
         <p>{{ result.message }}</p>
         {% if result.status == "success" and "output_pages" in result %}
         <p>Output pages: {{ result.output_pages }}</p>
+        {% if "output_count" in result %}
+        <p>Output files: {{ result.output_count }}</p>
+        {% endif %}
+        {% if "downloads" in result %}
+          {% for output in result.downloads %}
+        <a href="{{ output.download_url }}" download>Download {{ output.output_filename }}</a>
+          {% endfor %}
+        {% else %}
         <a href="{{ result.download_url }}" download>Download {{ result.output_filename }}</a>
+        {% endif %}
         {% endif %}
         {% if result.status == "success" and "preview_pages" in result %}
         <p>Preview pages: {{ result.preview_pages }}</p>
