@@ -48,6 +48,7 @@ def _default_options() -> ImpositionOptions:
         custom_width_mm="",
         custom_height_mm="",
         scaling_mode="proportional",
+        output_mode="aggregated",
     )
     assert error is None
     return options
@@ -139,6 +140,7 @@ def test_upload_generate_with_custom_dimensions(tmp_path: Path) -> None:
         custom_width_mm="210",
         custom_height_mm="297",
         scaling_mode="proportional",
+        output_mode="aggregated",
     )
     assert error is None
 
@@ -193,6 +195,8 @@ def test_index_form_contains_required_mvp_controls(tmp_path: Path) -> None:
     assert 'name="flyleafs"' in html
     assert 'id="duplex_rotate"' in html
     assert 'name="duplex_rotate"' in html
+    assert 'id="output_mode"' in html
+    assert 'name="output_mode"' in html
     assert 'type="submit"' in html
     assert 'name="action"' in html
     assert 'value="generate"' in html
@@ -217,6 +221,7 @@ def test_preview_action_renders_preview_artifact_link(tmp_path: Path) -> None:
             "flyleafs": "0",
             "custom_width_mm": "",
             "custom_height_mm": "",
+            "output_mode": "aggregated",
         },
         files={"file": ("input.pdf", _pdf_bytes(9), "application/pdf")},
     )
@@ -245,6 +250,7 @@ def test_generate_action_still_renders_output_link(tmp_path: Path) -> None:
             "flyleafs": "0",
             "custom_width_mm": "",
             "custom_height_mm": "",
+            "output_mode": "aggregated",
         },
         files={"file": ("input.pdf", _pdf_bytes(9), "application/pdf")},
     )
@@ -252,6 +258,79 @@ def test_generate_action_still_renders_output_link(tmp_path: Path) -> None:
     assert "Imposition complete." in response.text
     assert "Output pages: 6" in response.text
     assert re.search(r"/download/[a-f0-9]{32}/[^\"']+_imposed_duplex\.pdf", response.text) is not None
+
+
+@pytest.mark.parametrize(
+    ("output_mode", "expected_suffixes"),
+    [
+        ("aggregated", ["_imposed_duplex.pdf"]),
+        ("signatures", ["_signature0_duplex.pdf", "_signature1_duplex.pdf", "_signature2_duplex.pdf"]),
+        (
+            "both",
+            ["_imposed_duplex.pdf", "_signature0_duplex.pdf", "_signature1_duplex.pdf", "_signature2_duplex.pdf"],
+        ),
+    ],
+)
+def test_impose_payload_output_modes_create_only_requested_artifacts(
+    tmp_path: Path, output_mode: str, expected_suffixes: list[str]
+) -> None:
+    options, _, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=1,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="proportional",
+        output_mode=output_mode,
+    )
+    assert error is None
+
+    result, impose_error = _impose_payload(
+        payload=_pdf_bytes(9),
+        source_name="input.pdf",
+        options=options,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
+    assert impose_error is None
+    assert result is not None
+    assert result["output_mode"] == output_mode
+
+    downloads = result["downloads"]
+    assert len(downloads) == len(expected_suffixes)
+    for entry, suffix in zip(downloads, expected_suffixes, strict=True):
+        assert entry["output_filename"].endswith(suffix)
+        request_id, filename = _request_parts(entry["download_url"])
+        assert filename == entry["output_filename"]
+        assert _resolve_request_artifact_path(tmp_path, request_id, filename).is_file()
+
+    generated_artifacts = sorted(path.name for path in tmp_path.glob("*/*.pdf") if "_preview_sheet1" not in path.name)
+    assert generated_artifacts == sorted(entry["output_filename"] for entry in downloads)
+
+
+def test_generate_action_links_match_selected_output_mode(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/impose",
+        data={
+            "action": "generate",
+            "paper_size": "A4",
+            "signature_length": "1",
+            "flyleafs": "0",
+            "custom_width_mm": "",
+            "custom_height_mm": "",
+            "output_mode": "signatures",
+        },
+        files={"file": ("input.pdf", _pdf_bytes(9), "application/pdf")},
+    )
+    assert response.status_code == 200
+    assert "_imposed_duplex.pdf" not in response.text
+    assert len(re.findall(r"/download/[a-f0-9]{32}/[^\"']+_signature0_duplex\.pdf", response.text)) == 1
+    assert len(re.findall(r"/download/[a-f0-9]{32}/[^\"']+_signature1_duplex\.pdf", response.text)) == 1
+    assert len(re.findall(r"/download/[a-f0-9]{32}/[^\"']+_signature2_duplex\.pdf", response.text)) == 1
 
 
 def test_same_filename_uploads_get_unique_request_scoped_artifacts(tmp_path: Path) -> None:
@@ -522,6 +601,7 @@ def test_parse_form_input_rejects_invalid_paper_size() -> None:
         custom_width_mm="",
         custom_height_mm="",
         scaling_mode="proportional",
+        output_mode="aggregated",
     )
     assert form_values["paper_size"] == "Unknown"
     assert error is not None
@@ -537,6 +617,7 @@ def test_parse_form_input_rejects_invalid_scaling_mode() -> None:
         custom_width_mm="",
         custom_height_mm="",
         scaling_mode="zoom",
+        output_mode="aggregated",
     )
     assert form_values["scaling_mode"] == "zoom"
     assert error == "Invalid scaling mode. Choose proportional, stretch, or original."
@@ -551,6 +632,7 @@ def test_parse_form_input_requires_numeric_custom_dimensions() -> None:
         custom_width_mm="abc",
         custom_height_mm="210",
         scaling_mode="proportional",
+        output_mode="aggregated",
     )
     assert error == "Custom paper dimensions must be numeric values in millimeters."
 
@@ -564,6 +646,7 @@ def test_parse_form_input_rejects_non_positive_custom_dimensions() -> None:
         custom_width_mm="0",
         custom_height_mm="-1",
         scaling_mode="proportional",
+        output_mode="aggregated",
     )
     assert error == "Custom paper dimensions must be greater than 0 mm."
 
@@ -577,8 +660,23 @@ def test_parse_form_input_accepts_valid_custom_dimensions() -> None:
         custom_width_mm="210",
         custom_height_mm="297",
         scaling_mode="proportional",
+        output_mode="aggregated",
     )
     assert error is None
     assert form_values["paper_size"] == "Custom"
     assert options.custom_width_points == pytest.approx(595.2756, abs=0.2)
     assert options.custom_height_points == pytest.approx(841.8898, abs=0.2)
+
+
+def test_parse_form_input_rejects_invalid_output_mode() -> None:
+    _, _, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=6,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="proportional",
+        output_mode="legacy",
+    )
+    assert error == "Invalid output mode. Choose one of: aggregated, signatures, both."

@@ -26,7 +26,7 @@ Packaging smoke coverage for editable installs with a top-level `generated/` dir
 - Supported paper sizes: `A3`, `A4`, `A5`, `Letter`, `Legal`, `Tabloid`, and `Custom` (width/height in mm)
 - Supported scaling modes: `proportional`, `stretch`, `original`
 - Signature mode: standard fixed `sig_length` (in sheets)
-- Output: single aggregated duplex PDF
+- Output modes: aggregated duplex PDF, per-signature duplex PDFs, or both
 - Generated artifacts are request-scoped under `generated/<request-id>/...`
 - Stale generated artifacts older than 24 hours are cleaned on each `/impose` request
 - Form settings (paper size, scaling mode, signature length, flyleafs, duplex rotate) are restored from browser local storage
