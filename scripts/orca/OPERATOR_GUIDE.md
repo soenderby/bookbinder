@@ -89,12 +89,6 @@ tail -n 10 agent-logs/metrics.jsonl
 ./bb orca stop
 ```
 
-Optional consistency report:
-
-```bash
-./bb orca audit-consistency
-```
-
 ## What the Loop Does vs What Agents Do
 
 Orca loop (`agent-loop.sh`) does:

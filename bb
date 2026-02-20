@@ -15,7 +15,6 @@ Orca commands:
                          default mode: --continuous; agents can request stop)
   stop                   Stop running agent loop sessions
   status                 Show swarm/session/worktree status
-  audit-consistency      Run optional standalone tracker consistency report
   setup-worktrees [count]
                          Create persistent worktrees (default count: 2)
   with-lock ... -- cmd   Run a command under Orca's shared lock primitive
@@ -27,7 +26,6 @@ Examples:
   ./bb orca start 2 --reasoning-level high
   ./bb orca start --continuous
   ./bb orca status
-  ./bb orca audit-consistency
   ./bb orca with-lock --scope merge --timeout 120 -- git push origin main
   ./bb orca stop
 USAGE

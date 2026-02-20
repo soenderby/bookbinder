@@ -23,7 +23,6 @@ Orca intentionally keeps documentation to three markdown files in this directory
 - `stop`
 - `status`
 - `setup-worktrees [count]`
-- `audit-consistency` (optional standalone consistency report)
 - `with-lock [--scope NAME] [--timeout SECONDS] -- <command> [args...]`
 
 Helper script (direct invocation):
@@ -60,7 +59,6 @@ Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per ag
 - `agent-loop.sh`: per-agent run loop that executes the prompt, captures run artifacts, and records summary/metrics
 - `with-lock.sh`: scoped lock wrapper for commands that must serialize shared git integration operations
 - `status.sh`: displays sessions, worktrees, queue snapshots, logs, and metrics
-- `audit-consistency.sh`: optional standalone report validating parent/child status consistency in beads
 - `stop.sh`: stops active agent sessions
 - `AGENT_PROMPT.md`: agent instruction contract used by `agent-loop.sh`
 - `OPERATOR_GUIDE.md`: human operator playbook and design rationale
@@ -162,7 +160,7 @@ Signal handling:
 3. prints queue snapshots (`in_progress`, `closed`, `ready`)
 4. lists recent logs and summaries
 5. prints latest metrics rows
-6. skips consistency audit by default (`ORCA_STATUS_RUN_AUDIT=1` to include)
+6. does not run repository consistency checks (keeps status minimal)
 
 ## Error Handling Model
 
@@ -216,4 +214,3 @@ Discovery path is injected to agents as:
 - `AGENT_COMMAND`: full command for each run
 - `ORCA_LOCK_SCOPE`: default lock scope for `with-lock.sh` (`merge`)
 - `ORCA_LOCK_TIMEOUT_SECONDS`: lock timeout seconds (default `120`)
-- `ORCA_STATUS_RUN_AUDIT`: include consistency audit in status output (`0` default, `1` to enable)
