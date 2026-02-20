@@ -9,7 +9,7 @@ Usage:
 Options:
   count         Number of worker sessions/worktrees to launch (default: 2)
   --runs N      Stop each agent loop after N completed issue runs
-  --continuous  Keep each loop unbounded while ready work exists (default)
+  --continuous  Keep each loop unbounded (agent can request stop) (default)
   --reasoning-level LEVEL
                 Set `model_reasoning_effort` for default codex agent command
 USAGE
@@ -26,16 +26,11 @@ if [[ -n "${AGENT_COMMAND+x}" ]]; then
 fi
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
 MAX_RUNS="${MAX_RUNS:-0}"
-SYNC_MAX_ATTEMPTS="${SYNC_MAX_ATTEMPTS:-3}"
-SYNC_RETRY_SECONDS="${SYNC_RETRY_SECONDS:-5}"
-ORCA_MINIMAL_LANDING="${ORCA_MINIMAL_LANDING:-1}"
-ORCA_ENFORCE_MINIMAL_LANDING="${ORCA_ENFORCE_MINIMAL_LANDING:-0}"
+RUN_SLEEP_SECONDS="${RUN_SLEEP_SECONDS:-2}"
 ORCA_TIMING_METRICS="${ORCA_TIMING_METRICS:-1}"
 ORCA_COMPACT_SUMMARY="${ORCA_COMPACT_SUMMARY:-1}"
-ORCA_MERGE_REMOTE="${ORCA_MERGE_REMOTE:-origin}"
-ORCA_MERGE_TARGET_BRANCH="${ORCA_MERGE_TARGET_BRANCH:-main}"
-ORCA_MERGE_LOCK_TIMEOUT_SECONDS="${ORCA_MERGE_LOCK_TIMEOUT_SECONDS:-120}"
-ORCA_MERGE_MAX_ATTEMPTS="${ORCA_MERGE_MAX_ATTEMPTS:-3}"
+ORCA_LOCK_SCOPE="${ORCA_LOCK_SCOPE:-merge}"
+ORCA_LOCK_TIMEOUT_SECONDS="${ORCA_LOCK_TIMEOUT_SECONDS:-120}"
 
 check_prerequisites() {
   local missing=()
@@ -115,23 +110,8 @@ if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! [[ "${SYNC_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "[start] SYNC_MAX_ATTEMPTS must be a positive integer: ${SYNC_MAX_ATTEMPTS}" >&2
-  exit 1
-fi
-
-if ! [[ "${SYNC_RETRY_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "[start] SYNC_RETRY_SECONDS must be a positive integer: ${SYNC_RETRY_SECONDS}" >&2
-  exit 1
-fi
-
-if ! [[ "${ORCA_MINIMAL_LANDING}" =~ ^[01]$ ]]; then
-  echo "[start] ORCA_MINIMAL_LANDING must be 0 or 1: ${ORCA_MINIMAL_LANDING}" >&2
-  exit 1
-fi
-
-if ! [[ "${ORCA_ENFORCE_MINIMAL_LANDING}" =~ ^[01]$ ]]; then
-  echo "[start] ORCA_ENFORCE_MINIMAL_LANDING must be 0 or 1: ${ORCA_ENFORCE_MINIMAL_LANDING}" >&2
+if ! [[ "${RUN_SLEEP_SECONDS}" =~ ^[0-9]+$ ]]; then
+  echo "[start] RUN_SLEEP_SECONDS must be a non-negative integer: ${RUN_SLEEP_SECONDS}" >&2
   exit 1
 fi
 
@@ -145,13 +125,13 @@ if ! [[ "${ORCA_COMPACT_SUMMARY}" =~ ^[01]$ ]]; then
   exit 1
 fi
 
-if ! [[ "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "[start] ORCA_MERGE_LOCK_TIMEOUT_SECONDS must be a positive integer: ${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" >&2
+if ! [[ "${ORCA_LOCK_SCOPE}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "[start] ORCA_LOCK_SCOPE must contain only letters, digits, dot, underscore, or dash: ${ORCA_LOCK_SCOPE}" >&2
   exit 1
 fi
 
-if ! [[ "${ORCA_MERGE_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "[start] ORCA_MERGE_MAX_ATTEMPTS must be a positive integer: ${ORCA_MERGE_MAX_ATTEMPTS}" >&2
+if ! [[ "${ORCA_LOCK_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[start] ORCA_LOCK_TIMEOUT_SECONDS must be a positive integer: ${ORCA_LOCK_TIMEOUT_SECONDS}" >&2
   exit 1
 fi
 
@@ -174,7 +154,7 @@ if [[ ! -f "${PROMPT_TEMPLATE}" ]]; then
 fi
 
 if [[ "${MAX_RUNS}" -eq 0 ]]; then
-  mode_message="continuous until queue is empty"
+  mode_message="continuous (agent-controlled stop)"
 else
   mode_message="${MAX_RUNS} runs per agent"
 fi
@@ -194,7 +174,7 @@ for i in $(seq 1 "${COUNT}"); do
   fi
 
   echo "[start] launching ${session} in ${worktree}"
-  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_REASONING_LEVEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q SYNC_MAX_ATTEMPTS=%q SYNC_RETRY_SECONDS=%q ORCA_MINIMAL_LANDING=%q ORCA_ENFORCE_MINIMAL_LANDING=%q ORCA_TIMING_METRICS=%q ORCA_COMPACT_SUMMARY=%q ORCA_MERGE_REMOTE=%q ORCA_MERGE_TARGET_BRANCH=%q ORCA_MERGE_LOCK_TIMEOUT_SECONDS=%q ORCA_MERGE_MAX_ATTEMPTS=%q %q" \
+  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_REASONING_LEVEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q RUN_SLEEP_SECONDS=%q ORCA_TIMING_METRICS=%q ORCA_COMPACT_SUMMARY=%q ORCA_LOCK_SCOPE=%q ORCA_LOCK_TIMEOUT_SECONDS=%q %q" \
     "${ROOT}" \
     "agent-${i}" \
     "${session_id}" \
@@ -204,16 +184,11 @@ for i in $(seq 1 "${COUNT}"); do
     "${AGENT_COMMAND}" \
     "${PROMPT_TEMPLATE}" \
     "${MAX_RUNS}" \
-    "${SYNC_MAX_ATTEMPTS}" \
-    "${SYNC_RETRY_SECONDS}" \
-    "${ORCA_MINIMAL_LANDING}" \
-    "${ORCA_ENFORCE_MINIMAL_LANDING}" \
+    "${RUN_SLEEP_SECONDS}" \
     "${ORCA_TIMING_METRICS}" \
     "${ORCA_COMPACT_SUMMARY}" \
-    "${ORCA_MERGE_REMOTE}" \
-    "${ORCA_MERGE_TARGET_BRANCH}" \
-    "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" \
-    "${ORCA_MERGE_MAX_ATTEMPTS}" \
+    "${ORCA_LOCK_SCOPE}" \
+    "${ORCA_LOCK_TIMEOUT_SECONDS}" \
     "${SCRIPT_DIR}/agent-loop.sh")"
   tmux new-session -d -s "${session}" "${tmux_cmd}"
 

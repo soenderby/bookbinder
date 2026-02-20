@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 SESSION_PREFIX="${SESSION_PREFIX:-bb-agent}"
+ORCA_STATUS_RUN_AUDIT="${ORCA_STATUS_RUN_AUDIT:-0}"
 
 safe_run() {
   local context="$1"
@@ -105,10 +106,16 @@ fi
 
 echo
 echo "== consistency audit =="
-if [[ -x "${ROOT}/scripts/orca/audit-consistency.sh" ]]; then
-  if ! "${ROOT}/scripts/orca/audit-consistency.sh"; then
-    echo "(consistency audit reported issues)" >&2
+if [[ ! "${ORCA_STATUS_RUN_AUDIT}" =~ ^[01]$ ]]; then
+  echo "(ORCA_STATUS_RUN_AUDIT must be 0 or 1; current: ${ORCA_STATUS_RUN_AUDIT})"
+elif [[ "${ORCA_STATUS_RUN_AUDIT}" -eq 1 ]]; then
+  if [[ -x "${ROOT}/scripts/orca/audit-consistency.sh" ]]; then
+    if ! "${ROOT}/scripts/orca/audit-consistency.sh"; then
+      echo "(consistency audit reported issues)" >&2
+    fi
+  else
+    echo "(audit script not found)"
   fi
 else
-  echo "(audit script not found)"
+  echo "(skipped by default; run './bb orca audit-consistency' or set ORCA_STATUS_RUN_AUDIT=1)"
 fi

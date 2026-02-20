@@ -1,28 +1,37 @@
-You are __AGENT_NAME__, running in persistent loop mode.
+You are __AGENT_NAME__, running one Orca v2 loop iteration.
 
 Repository worktree: __WORKTREE__
-Claimed issue: __ISSUE_ID__
+Run summary JSON path: __SUMMARY_JSON_PATH__
+Discovery log path: __DISCOVERY_LOG_PATH__
 
-Execute exactly one issue in this run, then return control to the outer loop.
+Complete exactly one issue in this run, or report `no_work`, then return control.
 
-Required sequence:
+Required workflow:
 1. Read `AGENTS.md`.
-2. Read `docs/agents/worker-loop.md` and `docs/agents/task-creation-rules.md`.
-3. Inspect issue details:
-   - `bd show __ISSUE_ID__`
-   - `bd dep list __ISSUE_ID__`
-4. Implement the issue end-to-end.
-5. Create new beads for follow-up work discovered while implementing (edge cases, bugs, test gaps, docs).
-6. Run relevant tests/quality checks.
-7. Update documentation if behavior/workflow changed.
-8. Do not close the issue directly. The outer loop merges to main and closes the issue only after merge succeeds.
-9. Use minimal loop-mode closeout:
-   - ensure changes are committed and pushed to your current branch
-   - do not run `git pull --rebase`, `bd sync`, or `git remote prune origin` inside this run
-   - the outer loop handles synchronization and integration
-10. If push fails due missing upstream, set it and retry:
-    - `git push -u origin $(git branch --show-current)`
+2. Read `scripts/orca/agents/worker-loop.md` and `scripts/orca/agents/task-creation-rules.md`.
+3. Select and claim work yourself:
+   - inspect queue: `bd ready --limit 20`
+   - inspect candidate issue: `bd show <id>` and `bd dep list <id>`
+   - claim atomically: `bd update <id> --claim`
+4. Own issue transitions yourself (`open`/`in_progress`/`blocked`/`closed`) and keep notes current.
+5. Implement end-to-end, run relevant validation, and update docs when behavior/workflow changes.
+6. Own merge/integration yourself. Wrap shared-target merge/push in:
+   - `scripts/orca/with-lock.sh --scope merge --timeout 120 -- <merge-and-push-command>`
+7. Capture discoveries when useful:
+   - create follow-up beads linked to the current issue
+   - append notes to `__DISCOVERY_LOG_PATH__` (`ORCA_DISCOVERY_LOG_PATH`)
+8. Write summary JSON to `__SUMMARY_JSON_PATH__` with all required fields:
+   - `issue_id`
+   - `result` (`completed|blocked|no_work|failed`)
+   - `issue_status`
+   - `merged`
+   - `discovery_ids`
+   - `discovery_count`
+   - `loop_action` (`continue|stop`)
+   - `loop_action_reason`
+   - `notes`
 
-Constraints:
-- Do not pick a different issue in this run; the loop will provide the next issue in a later run.
-- If blocked, keep status `in_progress` and append clear notes to the issue with next steps.
+Summary rules:
+- Always write valid JSON, even for `blocked`, `no_work`, or `failed`.
+- Set `discovery_count` to the length of `discovery_ids`.
+- Use `loop_action=stop` only when you want the outer loop to stop.

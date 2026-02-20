@@ -2,6 +2,8 @@
 
 This directory contains the Orca multi-agent orchestration scripts.
 
+Orca-v2 is the active runtime. Loop orchestration is transport-focused, while agents own task policy and decisions.
+
 ## Entrypoints
 
 - Preferred: `./bb orca <command> [args]`
@@ -13,7 +15,12 @@ This directory contains the Orca multi-agent orchestration scripts.
 - `stop`
 - `status`
 - `setup-worktrees [count]`
-- `audit-consistency`
+- `audit-consistency` (optional standalone consistency report)
+- `with-lock [--scope NAME] [--timeout SECONDS] -- <command> [args...]`
+
+Helper script (direct invocation):
+
+- `scripts/orca/with-lock.sh [--scope NAME] [--timeout SECONDS] -- <command> [args...]`
 
 ## TODO
 In no particular order:
@@ -29,40 +36,87 @@ Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per ag
 
 1. `setup-worktrees.sh` ensures `worktrees/agent-N` and branch `swarm/agent-N` exist.
 2. `start.sh` launches one tmux session per agent and injects runtime env.
-3. `agent-loop.sh` runs inside each session, polling `bd ready`, claiming one issue, running the agent command, then repeating.
-4. `merge-after-run.sh` serializes integration from `swarm/agent-N` branches into `main` using a global `flock` lock.
-5. `status.sh` gives a multi-signal health snapshot (sessions, worktrees, queue, logs).
-6. `stop.sh` terminates active agent tmux sessions by prefix.
+3. `agent-loop.sh` runs one agent pass per iteration, writes per-run logs/metrics, and parses the agent summary JSON.
+4. `AGENT_PROMPT.md` defines the v2 contract: the agent selects/claims work, owns issue transitions, and owns merge.
+5. `with-lock.sh` provides the shared lock primitive for agent-owned merge/push critical sections.
+6. `status.sh` gives a multi-signal health snapshot (sessions, worktrees, queue, logs).
+7. `stop.sh` terminates active agent tmux sessions by prefix.
 
 ## File Roles
 
 - `orca.sh`: command dispatcher
 - `setup-worktrees.sh`: creates and verifies persistent agent worktrees
 - `start.sh`: launches tmux-backed agent loops
-- `agent-loop.sh`: per-agent loop for claiming and processing beads tasks
-- `merge-after-run.sh`: lock-protected integration step to merge completed agent branch work into target branch
+- `agent-loop.sh`: per-agent run loop that executes the prompt, captures run artifacts, and records summary/metrics
+- `with-lock.sh`: generic scoped lock wrapper for arbitrary commands that must serialize shared git integration operations
 - `status.sh`: displays sessions, worktrees, and recent activity
-- `audit-consistency.sh`: validates parent/child status consistency in beads
+- `audit-consistency.sh`: standalone optional report that validates parent/child status consistency in beads
 - `stop.sh`: stops active agent sessions
-- `AGENT_PROMPT.md`: prompt template used by `agent-loop.sh`
+- `AGENT_PROMPT.md`: v2 prompt contract used by `agent-loop.sh`
+
+## Agent Merge Lock Pattern (`with-lock.sh`)
+
+For agent-owned integration flows, the merge/push critical section must be wrapped in `with-lock.sh` so only one writer updates shared targets at a time.
+
+Required pattern:
+
+```bash
+scripts/orca/with-lock.sh --scope merge --timeout 120 -- \
+  bash -lc '
+    git fetch origin main
+    git checkout main
+    git pull --ff-only origin main
+    git merge --no-ff swarm/agent-1
+    git push origin main
+  '
+```
+
+Notes:
+
+1. Default scope is `merge`.
+2. Default lock file for `merge` scope is `<git-common-dir>/orca-global.lock`.
+3. Non-default scopes use `<git-common-dir>/orca-global-<scope>.lock`.
+4. Keep all shared-target write steps (`merge` + `push`) inside one `with-lock.sh` invocation.
+
+## Agent Responsibilities (v2)
+
+Per run, the agent is responsible for:
+
+1. selecting and claiming one issue (`bd ready` + `bd update <id> --claim`)
+2. owning issue transitions (`open`/`in_progress`/`blocked`/`closed`) and notes
+3. implementing, validating, and documenting changes
+4. performing merge/push itself with `scripts/orca/with-lock.sh`
+5. capturing discoveries:
+   - create follow-up beads when needed
+   - append notes to `agent-logs/discoveries/<agent-name>.md` (injected as `ORCA_DISCOVERY_LOG_PATH`)
+6. writing run summary JSON to the provided path
+
+## Run Summary JSON Contract (v2)
+
+The agent must write a JSON object to the path provided in the prompt (`__SUMMARY_JSON_PATH__` / `ORCA_RUN_SUMMARY_PATH`) with all fields below.
+
+| Field | Type | Required | Allowed values / notes |
+| --- | --- | --- | --- |
+| `issue_id` | string | yes | Issue handled in this run. Use empty string when no issue was claimed. |
+| `result` | string | yes | `completed`, `blocked`, `no_work`, `failed` |
+| `issue_status` | string | yes | Current issue status after this run (for example `in_progress`, `blocked`, `closed`, `open`, or empty when `no_work`). |
+| `merged` | boolean | yes | `true` only when merge/integration completed successfully in this run. |
+| `discovery_ids` | array of strings | yes | IDs of follow-up beads created during this run. Use `[]` when none. |
+| `discovery_count` | integer | yes | Must equal `discovery_ids` length. |
+| `loop_action` | string | yes | `continue` or `stop` |
+| `loop_action_reason` | string | yes | Reason for chosen `loop_action`; empty string allowed when not needed. |
+| `notes` | string | yes | Short machine-readable run note/handoff. |
 
 ## Core Loop Logic (`agent-loop.sh`)
 
 Each iteration follows this flow:
 
-1. Pre-sync guardrail: verify expected branch and clean worktree (`git status --porcelain` empty).
-2. Sync: run `git pull --rebase --autostash` then `bd sync`; retry bounded times on failure and continue loop with backoff if sync is still unavailable.
-   - if pull fails because upstream ref is missing, the loop tries `git push -u` to restore the worker branch upstream.
-3. Poll queue: call `bd ready --json` with bounded retries and backoff, then prefer claimable leaf issues.
-   - ready parent issues with open child tasks are skipped automatically.
-4. Claim work: attempt atomic claim via `bd update <id> --claim`; if claim race is lost, retry later.
-5. Run agent: render `AGENT_PROMPT.md` placeholders and run `AGENT_COMMAND`, logging to a per-run file.
-6. Post-agent handling: on success, re-check branch/cleanliness, apply minimal-closeout policy checks, and run `merge-after-run.sh`; on failure, return issue to `open` with notes.
-   - merge step requires the agent run HEAD commit to be present on `origin/swarm/agent-N` before integration.
-7. Close issue after merge: close the bead only if merge succeeded and the issue has no open child tasks.
-   - if child tasks are still open, the parent issue is explicitly kept open with an audit note.
-8. Post-sync guardrail: re-run the same fail-fast sync path as step 2.
-9. Exit conditions: no ready issues, `MAX_RUNS` reached, or hard guard/merge-finalization failure.
+1. Start run artifacts (`*.log`, `*-summary.json`, optional compact summary markdown).
+2. Render `AGENT_PROMPT.md` with runtime placeholders (agent name, worktree, summary path, discovery path).
+3. Run the agent command once for this iteration.
+4. Agent handles task policy: pick/claim issue, issue transitions, merge via `with-lock.sh`, and discovery capture.
+5. Parse summary JSON when present and append metrics.
+6. Continue until `MAX_RUNS` is reached, or stop when summary requests `loop_action=stop`.
 
 ## Validation and Safety Checks
 
@@ -73,8 +127,12 @@ Checks before launching sessions:
 1. prerequisites must exist: `git`, `tmux`, `bd`, `jq`, `flock`, plus the binary in `AGENT_COMMAND`
 2. `count` must be positive integer
 3. `MAX_RUNS` must be non-negative integer (`0` means unbounded)
-4. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+`
-5. `PROMPT_TEMPLATE` must exist
+4. `RUN_SLEEP_SECONDS` must be non-negative integer
+5. `ORCA_TIMING_METRICS` / `ORCA_COMPACT_SUMMARY` must be `0|1`
+6. `ORCA_LOCK_SCOPE` must match `[A-Za-z0-9._-]+`
+7. `ORCA_LOCK_TIMEOUT_SECONDS` must be a positive integer
+8. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+`
+9. `PROMPT_TEMPLATE` must exist
 
 Behavior details:
 
@@ -82,6 +140,7 @@ Behavior details:
 2. if `--reasoning-level` is set and `AGENT_COMMAND` was not explicitly overridden, append `-c model_reasoning_effort=<level>`
 3. if session already exists, it is left running (idempotent start)
 4. invokes `setup-worktrees.sh` before launching tmux sessions
+5. injects v2 runtime knobs into each loop session (`MAX_RUNS`, `RUN_SLEEP_SECONDS`, metrics toggles, lock scope/timeout)
 
 ### `setup-worktrees.sh`
 
@@ -98,19 +157,15 @@ Input/env validation before loop:
 
 1. `WORKTREE` is required and must be a valid git worktree
 2. `MAX_RUNS` must be non-negative integer
-3. `READY_MAX_ATTEMPTS` / `READY_RETRY_SECONDS` must be positive integers
-4. `SYNC_MAX_ATTEMPTS` / `SYNC_RETRY_SECONDS` must be positive integers
-5. `ORCA_MINIMAL_LANDING` / `ORCA_ENFORCE_MINIMAL_LANDING` must be `0|1`
-6. `ORCA_TIMING_METRICS` / `ORCA_COMPACT_SUMMARY` must be `0|1`
-7. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+`
-8. `MERGE_SCRIPT` must exist and be executable
-9. `ORCA_MERGE_LOCK_TIMEOUT_SECONDS` / `ORCA_MERGE_MAX_ATTEMPTS` must be positive integers
-10. expected branch is captured at startup and must remain stable
+3. `RUN_SLEEP_SECONDS` must be non-negative integer
+4. `ORCA_TIMING_METRICS` / `ORCA_COMPACT_SUMMARY` must be `0|1`
+5. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+` when set
+6. `PROMPT_TEMPLATE` must exist
 
 Signal and interruption handling:
 
 1. traps `INT`, `TERM`, `EXIT`
-2. if an issue is currently claimed, tries to return it to `open` with retries and note
+2. logs shutdown signal and exits cleanly
 3. avoids re-entrant cleanup with `cleanup_in_progress` guard
 
 ### `status.sh`
@@ -123,7 +178,7 @@ Observability behavior:
 4. prints available log filenames under `agent-logs/`
 5. prints recent summary files (`*-summary.md`)
 6. prints latest metrics rows (`agent-logs/metrics.jsonl`)
-7. runs `scripts/orca/audit-consistency.sh` to surface tracker drift
+7. skips consistency audit by default (can opt in with `ORCA_STATUS_RUN_AUDIT=1`)
 8. uses `safe_run` wrappers so partial command failures do not crash status output
 
 ### `stop.sh`
@@ -136,21 +191,13 @@ Shutdown behavior:
 
 ## Error Handling Model
 
-The scripts intentionally split failures into two categories:
+The v2 loop keeps workflow policy in the agent and treats script failures as transport/observability concerns:
 
-1. Hard-stop failures (loop exits): dirty worktree at guard checkpoints, unfixable branch drift, merge conflict/failure, or close-after-merge failure.
-2. Recoverable/transient failures (loop continues): transient `bd ready --json` failure (bounded retries), sync failures (`git pull`/`bd sync`) after bounded retries, claim race on `--claim`, minimal-closeout violations in warning mode, or temporary failure returning issue to open (retries, then manual-intervention warning).
+1. Startup hard-stop failures: invalid env/config, invalid `WORKTREE`, or missing prompt template.
+2. Run-level failures (loop continues by default): non-zero agent exit, missing/invalid summary JSON, or metrics append failure.
+3. Controlled stop conditions: `MAX_RUNS` reached, or parsed summary requests `loop_action=stop`.
 
-Minimal-closeout policy:
-1. In loop mode, agents should avoid `git pull --rebase`, `bd sync`, and `git remote prune origin` during each issue run.
-2. Current default is warning mode (`ORCA_ENFORCE_MINIMAL_LANDING=0`): violations are logged and surfaced in metrics/summaries.
-3. Planned future change (not active yet): set `ORCA_ENFORCE_MINIMAL_LANDING=1` to fail the run and return the issue to `open` on violation.
-
-Issue release retry policy:
-
-1. when agent run fails or loop is interrupted while holding a claim, Orca retries `bd update ... --status open` up to 3 times
-2. all retries append timestamped notes for auditability
-3. persistent failure is logged as manual-intervention-needed
+The loop does not claim/release/close issues in v2.
 
 ## Logs and Traceability
 
@@ -160,44 +207,50 @@ Session logs are written to:
 
 Per-run logs are written to:
 
-`agent-logs/<agent-name>-<session-id>-run-<n>-<issue-id>-<timestamp>.log`
+`agent-logs/<agent-name>-<session-id>-run-<n>-<timestamp>.log`
+
+Per-run summary JSON files are written to:
+
+`agent-logs/<agent-name>-<session-id>-run-<n>-<timestamp>-summary.json`
 
 Per-run compact summaries are written to:
 
-`agent-logs/<agent-name>-<session-id>-run-<n>-<issue-id>-<timestamp>-summary.md`
+`agent-logs/<agent-name>-<session-id>-run-<n>-<timestamp>-summary.md`
 
 Per-run metrics are appended to:
 
 `agent-logs/metrics.jsonl`
 
+Per-agent discovery notes (agent-owned) should be appended to:
+
+`agent-logs/discoveries/<agent-name>.md`
+
+`agent-loop.sh` ensures this file exists before each run and exposes it to agents via:
+
+- prompt placeholders: `__DISCOVERY_LOG_PATH__` (and alias `__AGENT_DISCOVERY_LOG_PATH__`)
+- env vars: `ORCA_DISCOVERY_LOG_PATH` (and alias `ORCA_AGENT_DISCOVERY_LOG_PATH`)
+
 Each run logs at least:
 
 1. session id and worktree
-2. claimed issue id
-3. agent command start/finish
-4. sync/guard failures
-5. claim-release failures/retries
-6. stage timings and token usage parse status
+2. agent command start/finish
+3. run exit code and duration
+4. summary parse status and parsed summary fields (when present)
+5. stage timings and token usage parse status
 
 This gives a full timeline for debugging queue behavior and git-state issues.
 
 ## Runtime Knobs
 
-- `MAX_RUNS`: number of issue runs per loop (`0` means unbounded until queue empty)
+- `MAX_RUNS`: number of issue runs per loop (`0` means unbounded unless agent requests stop)
 - `AGENT_MODEL`: default `gpt-5.3-codex` for default codex command
 - `AGENT_REASONING_LEVEL`: value passed as `model_reasoning_effort` for default codex command
-- `READY_MAX_ATTEMPTS`: retries for `bd ready --json` polling (default: `5`)
-- `READY_RETRY_SECONDS`: seconds between ready polling retries (default: `3`)
-- `SYNC_MAX_ATTEMPTS`: retries for sync stage (`git pull` + `bd sync`) before loop backoff (default: `3`)
-- `SYNC_RETRY_SECONDS`: seconds between sync retries/backoff (default: `5`)
-- `ORCA_MINIMAL_LANDING`: enable minimal-closeout policy checks (`1` default)
-- `ORCA_ENFORCE_MINIMAL_LANDING`: enforce minimal-closeout policy as hard-fail (`0` default; future strict mode switch)
+- `RUN_SLEEP_SECONDS`: sleep between iterations (default: `2`)
 - `ORCA_TIMING_METRICS`: emit per-run timing/token metrics to `metrics.jsonl` (`1` default)
 - `ORCA_COMPACT_SUMMARY`: emit per-run summary markdown and capture final agent message when possible (`1` default)
 - `SESSION_PREFIX`: tmux session prefix (default: `bb-agent`)
 - `PROMPT_TEMPLATE`: path to prompt template (default: `scripts/orca/AGENT_PROMPT.md`)
 - `AGENT_COMMAND`: full command used for each agent pass (default: `codex exec ...`)
-- `ORCA_MERGE_REMOTE`: remote used for integration (default: `origin`)
-- `ORCA_MERGE_TARGET_BRANCH`: branch integrated after each successful run (default: `main`)
-- `ORCA_MERGE_LOCK_TIMEOUT_SECONDS`: wait time for global merge lock (default: `120`)
-- `ORCA_MERGE_MAX_ATTEMPTS`: retries for transient merge fetch/push failures (default: `3`)
+- `ORCA_LOCK_SCOPE`: default scope used by `with-lock.sh` (default: `merge`)
+- `ORCA_LOCK_TIMEOUT_SECONDS`: default timeout used by `with-lock.sh` (default: `120`)
+- `ORCA_STATUS_RUN_AUDIT`: include `audit-consistency` when running `status` (`0` default, `1` to enable)

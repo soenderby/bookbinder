@@ -47,13 +47,13 @@ Each worker handoff must include:
 4. newly created follow-up beads
 5. remaining risks
 
-Use `docs/agents/handoff-template.md`.
+Use `scripts/orca/agents/handoff-template.md`.
 
 ## 5. Session Close
 
 Before session ends:
 1. Confirm all completed work has closed beads.
-2. Confirm completed work was merged into `main` (Orca loop handles this per run).
+2. Confirm completed work was merged into `main` by the worker/agent flow.
 3. Confirm all discovered follow-up work has beads.
 4. Confirm all local commits are pushed.
 5. Confirm `git status` is up to date with origin.

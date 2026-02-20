@@ -4,22 +4,22 @@ Use these documents when running multi-agent parallel delivery in this repositor
 
 ## Files
 
-1. `docs/agents/coordinator-loop.md`
+1. `scripts/orca/agents/coordinator-loop.md`
 - For the lead/coordinator assigning and monitoring parallel work.
 
-2. `docs/agents/worker-loop.md`
+2. `scripts/orca/agents/worker-loop.md`
 - Default workflow for each implementation agent.
 
-3. `docs/agents/task-creation-rules.md`
+3. `scripts/orca/agents/task-creation-rules.md`
 - Rules for creating follow-up beads and dependency links.
 
-4. `docs/agents/handoff-template.md`
+4. `scripts/orca/agents/handoff-template.md`
 - Required handoff format at end of each worker session.
 
-5. `docs/agents/minimal-worktree-swarm.md`
+5. `scripts/orca/agents/minimal-worktree-swarm.md`
 - Minimal scripts-first setup for persistent multi-worktree loops.
 
-6. `docs/agents/swarm-operator-runbook.md`
+6. `scripts/orca/agents/swarm-operator-runbook.md`
 - Human operator guide for start, monitor, scale, and stop procedures.
 
 ## Recommended Operating Model
@@ -27,6 +27,6 @@ Use these documents when running multi-agent parallel delivery in this repositor
 1. Coordinator prepares and assigns unblocked work.
 2. Each worker claims exactly one issue via `bd update <id> --claim`.
 3. Workers execute `worker-loop.md` and create follow-up beads as needed.
-4. Orca loop merges completed worker branches into `main` and closes issues after merge success.
+4. Workers/agents merge completed work into `main` and close issues when complete.
 5. Workers submit handoff using `handoff-template.md`.
 6. Coordinator closes session per `AGENTS.md`.

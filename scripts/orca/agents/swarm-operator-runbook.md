@@ -1,19 +1,21 @@
 # Agent Swarm Operator Runbook
 
-This guide is for a human operator running the persistent multi-worktree agent swarm.
+This guide is for a human operator running the persistent multi-worktree Orca-v2 swarm.
 
 ## 1. Purpose
 
 Use the swarm to drain ready unblocked beads tasks in parallel, or run bounded batches.
 
-Each loop:
-1. reads ready work from beads
-2. skips ready parent issues that still have open child tasks
-3. claims exactly one issue atomically
-4. runs one autonomous agent pass for that issue
-5. merges the worker branch into `main` using a global merge lock
-6. closes the issue only after merge succeeds and all child tasks are closed
-7. continues while work exists and exits when no ready tasks remain (or run limit is reached)
+In Orca-v2, each loop is transport-only:
+1. launch one agent run per iteration
+2. capture logs/metrics/summary artifacts
+3. continue until `--runs` limit or agent-requested stop
+
+Task policy is agent-owned:
+1. choose and claim work
+2. perform issue transitions
+3. merge/push (with `scripts/orca/with-lock.sh` around shared integration writes)
+4. close or leave issues open
 
 ## 2. Prerequisites
 
@@ -66,6 +68,8 @@ bd sync
 
 # Verify health
 ./bb orca status
+
+# Optional standalone consistency report
 ./bb orca audit-consistency
 ```
 
@@ -166,52 +170,31 @@ If a specific agent keeps failing:
 
 ## 9. Common Failures and Fixes
 
-1. `no ready beads; exiting loop` in logs:
-- This is normal when the queue is empty.
-- Start the swarm again after creating or un-blocking tasks in beads.
+1. Loop exits after a run with summary `loop_action=stop`:
+- Expected in v2 when the agent intentionally requests stop (for example `result=no_work`).
+- Review the latest `*-summary.json` and `*-summary.md` for the reason, then restart when ready.
 
-2. `could not claim <id>` in logs:
+2. `could not claim <id>` appears in run logs:
 - Normal race condition between agents.
-- Another loop claimed the issue first.
+- Agent should pick another ready issue in the next run.
 
-3. agent run fails after claim:
-- Loop should set the issue back to `open` automatically, clear assignee, and append a failure note.
-- Verify with:
-```bash
-bd show <id>
-```
+3. Agent run fails after claim:
+- Orca does not mutate issue state in v2.
+- Inspect run logs and `bd show <id>`, then either resume agent work or update issue status manually.
 
-4. merge step fails (conflict/push failure):
-- Loop returns the issue to `open` with a merge failure note and stops that worker loop.
-- Resolve conflict on the source branch, push, then restart swarm:
-```bash
-./bb orca start 2 --continuous
-```
+4. Merge step fails (conflict/push failure):
+- Merge/retry decisions are agent-owned in v2.
+- Resolve branch state, add issue notes, and restart the swarm if needed.
 
-5. push rejected from a worktree branch:
+5. Push rejected from a worktree branch:
 - Set upstream once in that worktree:
 ```bash
 git push -u origin $(git branch --show-current)
 ```
 
-6. agent CLI command fails immediately:
+6. Agent CLI command fails immediately:
 - Re-check `codex --version` and authentication.
 - Confirm `AGENT_COMMAND` override is valid if used.
-
-## 9.1 Minimal loop closeout policy
-
-Per-issue runs in Orca are expected to use minimal closeout:
-1. commit + push + issue notes/status updates
-2. avoid `git pull --rebase`, `bd sync`, and `git remote prune origin` inside each run
-3. let the outer loop handle sync/integration
-
-Current behavior:
-1. Orca logs warnings when these forbidden closeout commands are detected in run logs.
-2. This is warning-only by default.
-
-Planned future change (not active yet):
-1. Switch to strict enforcement by setting `ORCA_ENFORCE_MINIMAL_LANDING=1`.
-2. In strict mode, runs with forbidden closeout commands will be failed and the issue returned to `open`.
 
 ## 10. Operator Safety Rules
 

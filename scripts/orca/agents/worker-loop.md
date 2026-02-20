@@ -37,8 +37,6 @@ Rules:
 1. One active issue per agent.
 2. Do not edit files outside your claimed issue scope.
 3. If you discover a cross-issue dependency, create/update beads before coding further.
-4. Prefer leaf tasks over parent issues (feature/epic/chore with child tasks).
-5. Do not close a parent issue while any child issue is still open.
 
 ## 3. Implement the Task
 
@@ -79,20 +77,36 @@ Add/update docs when behavior, interface, or workflow changes.
 
 Typical doc targets:
 1. `SPEC.md` for scope/acceptance updates
-2. `docs/agents/*.md` for process changes
+2. `scripts/orca/agents/*.md` for process changes
 3. feature-specific notes if new operational steps are introduced
 
-## 6. Close Out the Issue
+## 6. Complete and Land the Issue
 
 When implementation and checks are complete:
+1. update issue notes/status as needed
+2. merge/push using the Orca global lock helper for shared-target writes
+3. close the issue when done
+
+Example merge/push critical section:
+
+```bash
+scripts/orca/with-lock.sh --scope merge --timeout 120 -- \
+  bash -lc '
+    git fetch origin main
+    git checkout main
+    git pull --ff-only origin main
+    git merge --no-ff "$(git branch --show-current)"
+    git push origin main
+  '
+```
+
+Close the issue:
 
 ```bash
 bd close <id> --reason "completed"
 ```
 
-When running under Orca persistent loop mode, follow the prompt override: do not close directly, because the outer loop closes only after merge to `main` succeeds.
-
-If not complete, leave issue `in_progress` and append clear notes:
+If not complete, leave issue `in_progress` or `blocked` and append clear notes:
 
 ```bash
 bd update <id> --append-notes "<status, blockers, next steps>"
@@ -110,8 +124,3 @@ git status
 ```
 
 Work is not complete until push succeeds and status confirms sync with origin.
-
-Orca loop-mode exception:
-1. In Orca persistent loop runs, do not execute full session-end closeout commands (`git pull --rebase`, `bd sync`, `git remote prune origin`) inside each issue run.
-2. Keep loop runs minimal: commit + push + issue notes/status updates only.
-3. The outer Orca loop handles sync and integration.
