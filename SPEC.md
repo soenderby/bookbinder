@@ -96,6 +96,7 @@ Deliver a reliable folio-only imposition tool that works end-to-end for common u
 3. Folio ordering is correct for duplex and duplex-rotate.
 4. Blank-page insertions do not crash output generation.
 5. For at least one numeric-page test PDF, page order matches expected sequence.
+6. Request-scoped download endpoint rejects invalid request IDs and malformed filenames with `400`, and returns `404` for missing artifacts.
 
 ## 3.7 MVP Functionality Checks (Required Gate)
 

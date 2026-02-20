@@ -84,6 +84,38 @@ def test_same_filename_uploads_get_unique_request_scoped_artifacts(tmp_path: Pat
     assert len(generated_artifacts) == 2
 
 
+@pytest.mark.parametrize("request_id", ["invalid", "abc", "g" * 32, "A" * 32])
+def test_download_rejects_invalid_request_id(tmp_path: Path, request_id: str) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get(f"/download/{request_id}/output.pdf")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid request id"}
+
+
+@pytest.mark.parametrize("filename", ["nested/secret.pdf", "nested/inner/secret.pdf"])
+def test_download_rejects_path_traversal_filename(tmp_path: Path, filename: str) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get(f"/download/{'a' * 32}/{filename}")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid filename"}
+
+
+def test_download_request_artifact_missing_returns_404(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get(f"/download/{'a' * 32}/missing.pdf")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "File not found"}
+
+
 def test_cleanup_removes_stale_generated_artifacts(tmp_path: Path) -> None:
     stale_request_dir = tmp_path / ("a" * 32)
     stale_request_dir.mkdir()
