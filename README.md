@@ -28,4 +28,5 @@ Packaging smoke coverage for editable installs with a top-level `generated/` dir
 - Output: single aggregated duplex PDF
 - Generated artifacts are request-scoped under `generated/<request-id>/...`
 - Stale generated artifacts older than 24 hours are cleaned on each `/impose` request
+- Form settings (paper size, signature length, flyleafs, duplex rotate) are restored from browser local storage
 - Unsupported in MVP: encrypted input PDFs, non-folio layouts

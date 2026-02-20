@@ -49,73 +49,66 @@
     </main>
     <script>
       (function () {
+        const storageKey = "bookbinder.form.v1";
         const form = document.querySelector('form[action="/impose"]');
-        if (!form) {
+        if (!form || typeof window.localStorage === "undefined") {
           return;
         }
 
-        const storageKey = "bookbinder.form.v1";
-        const fields = [
-          { id: "paper_size", kind: "value" },
-          { id: "signature_length", kind: "value" },
-          { id: "flyleafs", kind: "value" },
-          { id: "duplex_rotate", kind: "checked" },
-        ];
+        const persistable = Array.from(form.elements)
+          .filter((element) => {
+            return (
+              element instanceof HTMLInputElement ||
+              element instanceof HTMLSelectElement ||
+              element instanceof HTMLTextAreaElement
+            );
+          })
+          .filter((element) => {
+            return element.name && element.type !== "file" && element.type !== "submit" && element.type !== "button";
+          });
 
-        function readSavedState() {
-          try {
-            const raw = window.localStorage.getItem(storageKey);
-            if (!raw) {
-              return {};
+        const saveSettings = function () {
+          const snapshot = {};
+          for (const element of persistable) {
+            if (element instanceof HTMLInputElement && element.type === "checkbox") {
+              snapshot[element.name] = element.checked;
+            } else if (element instanceof HTMLInputElement && element.type === "radio") {
+              if (element.checked) {
+                snapshot[element.name] = element.value;
+              }
+            } else {
+              snapshot[element.name] = element.value;
             }
-            const parsed = JSON.parse(raw);
-            return parsed && typeof parsed === "object" ? parsed : {};
-          } catch {
-            return {};
           }
-        }
+          window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+        };
 
-        function restoreState() {
-          const saved = readSavedState();
-          for (const field of fields) {
-            const element = document.getElementById(field.id);
-            if (!element || !(field.id in saved)) {
-              continue;
-            }
-            const value = saved[field.id];
-            if (field.kind === "checked") {
-              element.checked = Boolean(value);
-              continue;
-            }
-            if (element.tagName === "SELECT") {
-              const valid = Array.from(element.options).some((option) => option.value === String(value));
-              if (!valid) {
-                continue;
+        const raw = window.localStorage.getItem(storageKey);
+        if (raw) {
+          try {
+            const saved = JSON.parse(raw);
+            if (saved && typeof saved === "object") {
+              for (const element of persistable) {
+                if (!Object.prototype.hasOwnProperty.call(saved, element.name)) {
+                  continue;
+                }
+                const value = saved[element.name];
+                if (element instanceof HTMLInputElement && element.type === "checkbox") {
+                  element.checked = value === true;
+                } else if (element instanceof HTMLInputElement && element.type === "radio") {
+                  element.checked = String(value) === element.value;
+                } else {
+                  element.value = String(value);
+                }
               }
             }
-            element.value = String(value);
+          } catch (error) {
+            window.localStorage.removeItem(storageKey);
           }
         }
 
-        function persistState() {
-          const nextState = {};
-          for (const field of fields) {
-            const element = document.getElementById(field.id);
-            if (!element) {
-              continue;
-            }
-            nextState[field.id] = field.kind === "checked" ? element.checked : element.value;
-          }
-          try {
-            window.localStorage.setItem(storageKey, JSON.stringify(nextState));
-          } catch {
-            // Ignore storage unavailability (private mode, quota, disabled).
-          }
-        }
-
-        restoreState();
-        form.addEventListener("change", persistState);
-        form.addEventListener("submit", persistState);
+        form.addEventListener("input", saveSettings);
+        form.addEventListener("change", saveSettings);
       })();
     </script>
   </body>
