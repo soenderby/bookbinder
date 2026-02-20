@@ -225,7 +225,7 @@ def create_app(
         }
         return render_index(request, result=result, form_values=form_values)
 
-    @app.get("/download/{request_id}/{filename}")
+    @app.get("/download/{request_id}/{filename:path}")
     def download_request_artifact(request_id: str, filename: str) -> FileResponse:
         if _REQUEST_ID_PATTERN.fullmatch(request_id) is None:
             raise HTTPException(status_code=400, detail="Invalid request id")
