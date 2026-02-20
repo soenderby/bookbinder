@@ -25,9 +25,10 @@ Packaging smoke coverage for editable installs with a top-level `generated/` dir
 
 - Supported paper sizes: `A4`, `Letter`
 - Supported scaling modes: `proportional`, `stretch`, `original`
+- Supported positioning modes: `centered`, `binding_aligned`
 - Signature mode: standard fixed `sig_length` (in sheets)
 - Output: single aggregated duplex PDF
 - Generated artifacts are request-scoped under `generated/<request-id>/...`
 - Stale generated artifacts older than 24 hours are cleaned on each `/impose` request
-- Form settings (paper size, scaling mode, signature length, flyleafs, duplex rotate) are restored from browser local storage
+- Form settings (paper size, scaling mode, positioning mode, signature length, flyleafs, duplex rotate) are restored from browser local storage
 - Unsupported in MVP: encrypted input PDFs, non-folio layouts

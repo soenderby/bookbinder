@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, Sequence, cast
 
 from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import DecodedStreamObject
@@ -13,6 +13,8 @@ from bookbinder.imposition.core import BLANK_PAGE, PageToken, impose_signature
 
 ScalingMode = Literal["proportional", "stretch", "original"]
 _SCALING_MODES: tuple[ScalingMode, ...] = ("proportional", "stretch", "original")
+PositioningMode = Literal["centered", "binding_aligned"]
+_POSITIONING_MODES: tuple[PositioningMode, ...] = ("centered", "binding_aligned")
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,15 @@ def deterministic_output_filename(source_name: str) -> str:
     return f"{slug}_imposed_duplex.pdf"
 
 
+def resolve_positioning_mode(value: str) -> PositioningMode:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in _POSITIONING_MODES:
+        return cast(PositioningMode, normalized)
+
+    valid = ", ".join(_POSITIONING_MODES)
+    raise ValueError(f"unsupported positioning mode '{value}', expected one of: {valid}")
+
+
 def _resolve_scales(
     *,
     source_width: float,
@@ -173,7 +184,8 @@ def _slot_transform(
     slot_index: int,
     output_width: float,
     output_height: float,
-    scaling_mode: ScalingMode,
+    scaling_mode: ScalingMode = "proportional",
+    positioning_mode: PositioningMode = "centered",
 ) -> Transformation:
     source_width = float(source_page.mediabox.width)
     source_height = float(source_page.mediabox.height)
@@ -191,9 +203,14 @@ def _slot_transform(
     rendered_width = source_width * scale_x
     rendered_height = source_height * scale_y
 
-    x_offset = (slot_width - rendered_width) / 2.0
-    if slot_index == 1:
-        x_offset += slot_width
+    if positioning_mode == "centered":
+        local_x_offset = (slot_width - rendered_width) / 2.0
+    elif positioning_mode == "binding_aligned":
+        local_x_offset = slot_width - rendered_width if slot_index == 0 else 0.0
+    else:
+        raise ValueError(f"unsupported positioning mode '{positioning_mode}'")
+
+    x_offset = local_x_offset + (slot_width if slot_index == 1 else 0.0)
 
     y_offset = (slot_height - rendered_height) / 2.0
     return Transformation().scale(scale_x, scale_y).translate(x_offset, y_offset)
@@ -207,6 +224,7 @@ def _slot_geometry(
     output_height: float,
     blank_token: str,
     scaling_mode: ScalingMode = "proportional",
+    positioning_mode: PositioningMode = "centered",
 ) -> SlotGeometry:
     slot_width = output_width / 2.0
     slot_height = output_height
@@ -245,7 +263,14 @@ def _slot_geometry(
     )
     rendered_width = source_width * scale_x
     rendered_height = source_height * scale_y
-    x_offset = slot_x + (slot_width - rendered_width) / 2.0
+    if positioning_mode == "centered":
+        local_x_offset = (slot_width - rendered_width) / 2.0
+    elif positioning_mode == "binding_aligned":
+        local_x_offset = slot_width - rendered_width if slot_index == 0 else 0.0
+    else:
+        raise ValueError(f"unsupported positioning mode '{positioning_mode}'")
+
+    x_offset = slot_x + local_x_offset
     y_offset = (slot_height - rendered_height) / 2.0
 
     return SlotGeometry(
@@ -274,6 +299,7 @@ def _place_token(
     output_height: float,
     blank_token: str,
     scaling_mode: ScalingMode = "proportional",
+    positioning_mode: PositioningMode = "centered",
 ) -> None:
     if token == blank_token:
         return
@@ -288,6 +314,7 @@ def _place_token(
         output_width,
         output_height,
         scaling_mode=scaling_mode,
+        positioning_mode=positioning_mode,
     )
     imposed_page.merge_transformed_page(source_page, transform)
 
@@ -309,10 +336,12 @@ def write_first_sheet_preview(
     paper_size: str,
     duplex_rotate: bool,
     scaling_mode: ScalingMode = "proportional",
+    positioning_mode: PositioningMode = "centered",
     blank_token: str = BLANK_PAGE,
     print_marks: PrintMarksOptions | None = None,
 ) -> PreviewArtifact:
     output_width, output_height = resolve_paper_dimensions(paper_size)
+    resolved_positioning_mode = resolve_positioning_mode(positioning_mode)
 
     first_side = None
     for signature in signatures:
@@ -334,6 +363,7 @@ def write_first_sheet_preview(
         output_height=output_height,
         blank_token=blank_token,
         scaling_mode=scaling_mode,
+        positioning_mode=resolved_positioning_mode,
     )
     _place_token(
         imposed_page,
@@ -344,6 +374,7 @@ def write_first_sheet_preview(
         output_height=output_height,
         blank_token=blank_token,
         scaling_mode=scaling_mode,
+        positioning_mode=resolved_positioning_mode,
     )
     mark_settings = print_marks or PrintMarksOptions()
     _append_page_commands(
@@ -369,6 +400,7 @@ def write_first_sheet_preview(
         output_height=output_height,
         blank_token=blank_token,
         scaling_mode=scaling_mode,
+        positioning_mode=resolved_positioning_mode,
     )
     right_geometry = _slot_geometry(
         reader=reader,
@@ -378,6 +410,7 @@ def write_first_sheet_preview(
         output_height=output_height,
         blank_token=blank_token,
         scaling_mode=scaling_mode,
+        positioning_mode=resolved_positioning_mode,
     )
 
     return PreviewArtifact(
@@ -397,10 +430,12 @@ def write_duplex_aggregated_pdf(
     paper_size: str,
     duplex_rotate: bool,
     scaling_mode: ScalingMode = "proportional",
+    positioning_mode: PositioningMode = "centered",
     blank_token: str = BLANK_PAGE,
     print_marks: PrintMarksOptions | None = None,
 ) -> GeneratedArtifact:
     output_width, output_height = resolve_paper_dimensions(paper_size)
+    resolved_positioning_mode = resolve_positioning_mode(positioning_mode)
 
     writer = PdfWriter()
     placed_tokens: list[tuple[PageToken, PageToken]] = []
@@ -419,6 +454,7 @@ def write_duplex_aggregated_pdf(
                 output_height=output_height,
                 blank_token=blank_token,
                 scaling_mode=scaling_mode,
+                positioning_mode=resolved_positioning_mode,
             )
             _place_token(
                 imposed_page,
@@ -429,6 +465,7 @@ def write_duplex_aggregated_pdf(
                 output_height=output_height,
                 blank_token=blank_token,
                 scaling_mode=scaling_mode,
+                positioning_mode=resolved_positioning_mode,
             )
             _append_page_commands(
                 imposed_page,

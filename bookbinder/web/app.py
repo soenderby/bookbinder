@@ -23,9 +23,11 @@ from bookbinder.constants import (
 )
 from bookbinder.imposition.core import build_ordered_pages, split_signatures
 from bookbinder.imposition.pdf_writer import (
+    _POSITIONING_MODES,
     _SCALING_MODES,
     deterministic_preview_filename,
     deterministic_output_filename,
+    resolve_positioning_mode,
     write_first_sheet_preview,
     write_duplex_aggregated_pdf,
 )
@@ -41,6 +43,7 @@ class ImpositionOptions:
     flyleafs: int
     duplex_rotate: bool
     scaling_mode: str
+    positioning_mode: str
 
 
 def _cleanup_stale_artifacts(
@@ -89,6 +92,7 @@ def _parse_form_input(
     flyleafs: int,
     duplex_rotate: bool,
     scaling_mode: str,
+    positioning_mode: str,
 ) -> tuple[ImpositionOptions, dict[str, Any], str | None]:
     options = ImpositionOptions(
         paper_size=paper_size,
@@ -96,6 +100,7 @@ def _parse_form_input(
         flyleafs=flyleafs,
         duplex_rotate=duplex_rotate,
         scaling_mode=scaling_mode,
+        positioning_mode=positioning_mode,
     )
     form_values: dict[str, Any] = {
         "paper_size": options.paper_size,
@@ -103,12 +108,27 @@ def _parse_form_input(
         "flyleafs": options.flyleafs,
         "duplex_rotate": options.duplex_rotate,
         "scaling_mode": options.scaling_mode,
+        "positioning_mode": options.positioning_mode,
     }
 
     if options.paper_size not in PAPER_SIZES:
         return options, form_values, "Invalid paper size. Choose A4 or Letter."
     if options.scaling_mode not in _SCALING_MODES:
         return options, form_values, "Invalid scaling mode. Choose proportional, stretch, or original."
+    try:
+        resolved_positioning_mode = resolve_positioning_mode(options.positioning_mode)
+    except ValueError:
+        return options, form_values, "Invalid positioning mode. Choose centered or binding_aligned."
+
+    options = ImpositionOptions(
+        paper_size=options.paper_size,
+        signature_length=options.signature_length,
+        flyleafs=options.flyleafs,
+        duplex_rotate=options.duplex_rotate,
+        scaling_mode=options.scaling_mode,
+        positioning_mode=resolved_positioning_mode,
+    )
+    form_values["positioning_mode"] = resolved_positioning_mode
 
     return options, form_values, None
 
@@ -166,6 +186,7 @@ def _impose_payload(
         paper_size=options.paper_size,
         duplex_rotate=options.duplex_rotate,
         scaling_mode=options.scaling_mode,
+        positioning_mode=options.positioning_mode,
     )
     artifact = write_duplex_aggregated_pdf(
         reader,
@@ -174,6 +195,7 @@ def _impose_payload(
         paper_size=options.paper_size,
         duplex_rotate=options.duplex_rotate,
         scaling_mode=options.scaling_mode,
+        positioning_mode=options.positioning_mode,
     )
 
     return {
@@ -250,6 +272,7 @@ def create_app(
             "flyleafs": 0,
             "duplex_rotate": False,
             "scaling_mode": "proportional",
+            "positioning_mode": "centered",
         }
         if form_values:
             defaults.update(form_values)
@@ -261,6 +284,7 @@ def create_app(
                 "result": result,
                 "paper_sizes": sorted(PAPER_SIZES.keys()),
                 "scaling_modes": list(_SCALING_MODES),
+                "positioning_modes": list(_POSITIONING_MODES),
                 "form": defaults,
             },
             status_code=status_code,
@@ -283,6 +307,7 @@ def create_app(
         flyleafs: int = Form(0, ge=0),
         duplex_rotate: bool = Form(False),
         scaling_mode: str = Form("proportional"),
+        positioning_mode: str = Form("centered"),
     ) -> HTMLResponse:
         options, form_values, form_error = _parse_form_input(
             paper_size=paper_size,
@@ -290,6 +315,7 @@ def create_app(
             flyleafs=flyleafs,
             duplex_rotate=duplex_rotate,
             scaling_mode=scaling_mode,
+            positioning_mode=positioning_mode,
         )
         if form_error is not None:
             return render_index(
