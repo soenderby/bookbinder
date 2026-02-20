@@ -46,6 +46,7 @@ Verification date: 2026-02-20
 
 ## SPEC 3.7 Gate Evidence
 
+- `./scripts/run-mvp-gates.sh` (installs via `constraints/worker-runtime.txt`) -> PASS
 - `pytest -m mvp_unit -vv` -> PASS (`8 passed, 18 deselected`)
 - `pytest -m mvp_integration -vv` -> PASS (`18 passed, 8 deselected`)
 - `pytest -vv` -> PASS (`26 passed`)
