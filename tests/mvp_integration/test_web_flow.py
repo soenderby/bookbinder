@@ -195,6 +195,37 @@ def test_legacy_download_path_resolution_and_errors(tmp_path: Path) -> None:
     assert invalid_exc.value.detail == "Invalid filename"
 
 
+def test_legacy_download_endpoint_serves_existing_artifact(tmp_path: Path) -> None:
+    artifact = tmp_path / "legacy.pdf"
+    artifact.write_bytes(b"legacy payload")
+
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/download/legacy.pdf")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content == b"legacy payload"
+
+
+def test_legacy_download_endpoint_missing_artifact_returns_404(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/download/missing.pdf")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "File not found"}
+
+
+def test_legacy_download_endpoint_rejects_path_traversal_filename(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/download/..%5Csecret.pdf")
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid filename"}
+
+
 def test_download_expired_request_artifact_returns_actionable_410(tmp_path: Path) -> None:
     app = create_app(artifact_dir=tmp_path)
     client = TestClient(app)
