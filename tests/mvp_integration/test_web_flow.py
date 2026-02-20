@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from starlette.datastructures import UploadFile
 
+from bookbinder.imposition.core import build_ordered_pages, impose_signature, split_signatures
 from bookbinder.web.app import (
     ImpositionOptions,
     _impose_payload,
@@ -82,6 +83,23 @@ def test_upload_generate_and_download(tmp_path: Path) -> None:
     resolved = _resolve_request_artifact_path(tmp_path, request_id, filename)
     assert resolved.is_file()
     assert resolved.suffix.lower() == ".pdf"
+    preview_url = result["preview_download_url"]
+    preview_request_id, preview_filename = _request_parts(preview_url)
+    assert preview_request_id == request_id
+    preview_path = _resolve_request_artifact_path(tmp_path, preview_request_id, preview_filename)
+    assert preview_path.is_file()
+    assert result["preview_filename"] == preview_filename
+    assert result["preview_pages"] == 1
+
+    sheet = result["preview_sheet"]
+    assert tuple(sheet["placed_tokens"]) == ("__BLANK_PAGE__", 0)
+    assert sheet["output_width"] > 0
+    assert sheet["output_height"] > 0
+    assert len(sheet["slots"]) == 2
+    assert sheet["slots"][0]["slot_index"] == 0
+    assert sheet["slots"][1]["slot_index"] == 1
+    assert sheet["slots"][0]["token"] == "__BLANK_PAGE__"
+    assert sheet["slots"][1]["token"] == 0
 
 
 def test_health_endpoint_contract(tmp_path: Path) -> None:
@@ -149,7 +167,33 @@ def test_same_filename_uploads_get_unique_request_scoped_artifacts(tmp_path: Pat
     assert _resolve_request_artifact_path(tmp_path, second_request_id, second_filename).is_file()
 
     generated_artifacts = list(tmp_path.glob("*/*.pdf"))
-    assert len(generated_artifacts) == 2
+    assert len(generated_artifacts) == 4
+
+
+def test_preview_sheet_geometry_matches_first_imposed_sheet_mapping(tmp_path: Path) -> None:
+    options = _default_options()
+    payload = _pdf_bytes(9)
+
+    result, error = _impose_payload(
+        payload=payload,
+        source_name="mapping.pdf",
+        options=options,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
+
+    assert error is None
+    assert result is not None
+
+    source_pages = list(range(9))
+    ordered_pages = build_ordered_pages(source_pages, flyleaf_sets=options.flyleafs)
+    signatures = split_signatures(ordered_pages, sig_length_sheets=options.signature_length)
+    expected_first_side = impose_signature(signatures[0], duplex_rotate=options.duplex_rotate)[0]
+
+    preview_sheet = result["preview_sheet"]
+    assert tuple(preview_sheet["placed_tokens"]) == (expected_first_side.left, expected_first_side.right)
+    assert preview_sheet["slots"][0]["token"] == expected_first_side.left
+    assert preview_sheet["slots"][1]["token"] == expected_first_side.right
 
 
 @pytest.mark.parametrize("request_id", ["invalid", "abc", "g" * 32, "A" * 32])

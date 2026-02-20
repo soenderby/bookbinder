@@ -9,8 +9,10 @@ from pypdf import PdfReader, PdfWriter
 from bookbinder.imposition.core import BLANK_PAGE
 from bookbinder.imposition.pdf_writer import (
     _place_token,
+    deterministic_preview_filename,
     deterministic_output_filename,
     resolve_paper_dimensions,
+    write_first_sheet_preview,
     write_duplex_aggregated_pdf,
 )
 
@@ -50,6 +52,19 @@ def test_resolve_paper_dimensions_rejects_unknown_paper_size() -> None:
 )
 def test_deterministic_output_filename_handles_slug_edge_cases(source_name: str, expected: str) -> None:
     assert deterministic_output_filename(source_name) == expected
+
+
+@pytest.mark.parametrize(
+    ("source_name", "expected"),
+    [
+        ("Quarterly Report (Final).pdf", "quarterly_report_final_preview_sheet1.pdf"),
+        ("!!!.pdf", "output_preview_sheet1.pdf"),
+        ("", "output_preview_sheet1.pdf"),
+        ("docs/My Input v2.PDF", "my_input_v2_preview_sheet1.pdf"),
+    ],
+)
+def test_deterministic_preview_filename_handles_slug_edge_cases(source_name: str, expected: str) -> None:
+    assert deterministic_preview_filename(source_name) == expected
 
 
 def test_place_token_skips_blank_sentinel() -> None:
@@ -98,3 +113,16 @@ def test_write_duplex_aggregated_pdf_surfaces_invalid_token_error(tmp_path: Path
             duplex_rotate=False,
         )
 
+
+def test_write_first_sheet_preview_surfaces_invalid_token_error(tmp_path: Path) -> None:
+    reader = _single_page_reader()
+    output_path = tmp_path / "preview.pdf"
+
+    with pytest.raises(ValueError, match=r"expected int page token or blank token, got 'bad'"):
+        write_first_sheet_preview(
+            reader=reader,
+            signatures=[["bad", 0, 0, 0]],
+            output_path=output_path,
+            paper_size="A4",
+            duplex_rotate=False,
+        )
