@@ -3,6 +3,12 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 SESSION_PREFIX="${SESSION_PREFIX:-bb-agent}"
+METRICS_FILE="${ROOT}/agent-logs/metrics.jsonl"
+ORCA_STATUS_STALE_SECONDS="${ORCA_STATUS_STALE_SECONDS:-900}"
+ORCA_STATUS_CLAIMED_LIMIT="${ORCA_STATUS_CLAIMED_LIMIT:-20}"
+ORCA_STATUS_CLOSED_LIMIT="${ORCA_STATUS_CLOSED_LIMIT:-10}"
+ORCA_STATUS_RECENT_METRIC_LIMIT="${ORCA_STATUS_RECENT_METRIC_LIMIT:-10}"
+FIELD_SEP=$'\x1f'
 
 safe_run() {
   local context="$1"
@@ -15,11 +21,390 @@ safe_run() {
   return 1
 }
 
-echo "== tmux sessions =="
+count_non_empty_lines() {
+  local text="${1:-}"
+  if [[ -z "${text}" ]]; then
+    echo "0"
+    return 0
+  fi
+
+  printf '%s\n' "${text}" | sed '/^[[:space:]]*$/d' | wc -l | tr -d '[:space:]'
+}
+
+timestamp_to_epoch() {
+  local timestamp="$1"
+
+  if [[ -z "${timestamp}" ]]; then
+    return 1
+  fi
+
+  date -d "${timestamp}" +%s 2>/dev/null
+}
+
+format_age_from_timestamp() {
+  local timestamp="$1"
+  local now_epoch
+  local ts_epoch
+  local age_seconds
+
+  now_epoch="$(date +%s)"
+  if ! ts_epoch="$(timestamp_to_epoch "${timestamp}")"; then
+    echo "unknown"
+    return 0
+  fi
+
+  age_seconds="$((now_epoch - ts_epoch))"
+  if (( age_seconds < 0 )); then
+    age_seconds=0
+  fi
+
+  if (( age_seconds < 60 )); then
+    echo "${age_seconds}s ago"
+    return 0
+  fi
+
+  if (( age_seconds < 3600 )); then
+    echo "$((age_seconds / 60))m ago"
+    return 0
+  fi
+
+  if (( age_seconds < 86400 )); then
+    echo "$((age_seconds / 3600))h ago"
+    return 0
+  fi
+
+  echo "$((age_seconds / 86400))d ago"
+}
+
+format_seconds_short() {
+  local value="$1"
+  local total
+  local minutes
+  local seconds
+
+  if ! [[ "${value}" =~ ^[0-9]+$ ]]; then
+    echo "${value}"
+    return 0
+  fi
+
+  total="${value}"
+  if (( total < 60 )); then
+    echo "${total}s"
+    return 0
+  fi
+
+  if (( total < 3600 )); then
+    minutes="$((total / 60))"
+    seconds="$((total % 60))"
+    printf '%dm%02ds\n' "${minutes}" "${seconds}"
+    return 0
+  fi
+
+  printf '%dh%02dm\n' "$((total / 3600))" "$(((total % 3600) / 60))"
+}
+
+truncate_text() {
+  local text="$1"
+  local max_len="$2"
+
+  if (( ${#text} <= max_len )); then
+    printf '%s' "${text}"
+    return 0
+  fi
+
+  printf '%s...' "${text:0:max_len-3}"
+}
+
+session_name_for_agent() {
+  local agent_name="$1"
+
+  if [[ "${agent_name}" =~ ^agent-[0-9]+$ ]]; then
+    echo "${SESSION_PREFIX}-${agent_name#agent-}"
+    return 0
+  fi
+
+  echo ""
+}
+
+session_is_up() {
+  local session_name="$1"
+
+  if [[ -z "${session_name}" ]]; then
+    return 1
+  fi
+
+  if [[ -z "${tmux_sessions}" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "${tmux_sessions}" | grep -Fxq "${session_name}"
+}
+
+declare -a ALERTS=()
+add_alert() {
+  local message="$1"
+  local existing
+
+  for existing in "${ALERTS[@]:-}"; do
+    if [[ "${existing}" == "${message}" ]]; then
+      return 0
+    fi
+  done
+
+  ALERTS+=("${message}")
+}
+
+tmux_available=0
+tmux_sessions=""
+tmux_sessions_verbose=""
 if command -v tmux >/dev/null 2>&1; then
-  tmux_sessions="$(tmux ls 2>/dev/null | grep "^${SESSION_PREFIX}-" || true)"
-  if [[ -n "${tmux_sessions}" ]]; then
-    printf '%s\n' "${tmux_sessions}"
+  tmux_available=1
+  tmux_sessions="$(tmux ls -F '#S' 2>/dev/null | grep "^${SESSION_PREFIX}-" || true)"
+  tmux_sessions_verbose="$(tmux ls 2>/dev/null | grep "^${SESSION_PREFIX}-" || true)"
+fi
+tmux_count="$(count_non_empty_lines "${tmux_sessions}")"
+
+worktree_list=""
+if ! worktree_list="$(git worktree list 2>/dev/null)"; then
+  worktree_list=""
+fi
+
+agent_worktree_count="$(
+  printf '%s\n' "${worktree_list}" \
+    | awk -v root="${ROOT}/worktrees/agent-" '$1 ~ "^" root {count++} END {print count+0}'
+)"
+
+main_dirty_count="$(git -C "${ROOT}" status --porcelain 2>/dev/null | wc -l | tr -d '[:space:]')"
+
+metrics_summary_available=0
+metrics_file_status="missing"
+metrics_rollup=""
+agent_activity_rows=""
+attention_event_rows=""
+recent_metrics_rows=""
+
+total_runs=0
+completed_runs=0
+blocked_runs=0
+failed_runs=0
+no_work_runs=0
+last_timestamp=""
+last_result=""
+last_issue=""
+last_agent=""
+last_reason=""
+last_duration=""
+last_tokens=""
+
+if [[ ! -f "${METRICS_FILE}" ]]; then
+  metrics_file_status="missing"
+elif [[ ! -s "${METRICS_FILE}" ]]; then
+  metrics_file_status="empty"
+elif ! command -v jq >/dev/null 2>&1; then
+  metrics_file_status="jq_unavailable"
+else
+  metrics_rollup="$(
+    jq -r -s '
+      . as $rows
+      | if ($rows | length) == 0 then ""
+        else
+          ($rows[-1]) as $last
+          | [
+              ($rows | length),
+              ($rows | map(select(.result == "completed")) | length),
+              ($rows | map(select(.result == "blocked")) | length),
+              ($rows | map(select(.result == "failed")) | length),
+              ($rows | map(select(.result == "no_work")) | length),
+              ($last.timestamp // ""),
+              ($last.result // ""),
+              ($last.issue_id // ""),
+              ($last.agent_name // ""),
+              ($last.reason // ""),
+              (($last.durations_seconds.iteration_total // 0) | tostring),
+              (if $last.tokens_used == null then "n/a" else ($last.tokens_used | tostring) end)
+            ]
+          | map(tostring)
+          | join("\u001f")
+        end
+    ' "${METRICS_FILE}" 2>/dev/null || true
+  )"
+
+  if [[ -n "${metrics_rollup}" ]]; then
+    metrics_summary_available=1
+    metrics_file_status="ok"
+    IFS="${FIELD_SEP}" read -r \
+      total_runs \
+      completed_runs \
+      blocked_runs \
+      failed_runs \
+      no_work_runs \
+      last_timestamp \
+      last_result \
+      last_issue \
+      last_agent \
+      last_reason \
+      last_duration \
+      last_tokens <<< "${metrics_rollup}"
+  else
+    metrics_file_status="parse_error"
+  fi
+
+  agent_activity_rows="$(
+    jq -r -s '
+      reduce .[] as $row ({}; .[$row.agent_name] = $row)
+      | to_entries
+      | sort_by(.key)
+      | .[]
+      | .value
+      | [
+          (.agent_name // "unknown-agent"),
+          (.session_id // ""),
+          (.timestamp // ""),
+          (.result // ""),
+          (.issue_id // ""),
+          (.summary.issue_status // ""),
+          ((.durations_seconds.iteration_total // 0) | tostring),
+          (if .tokens_used == null then "n/a" else (.tokens_used | tostring) end),
+          (.summary.loop_action // ""),
+          (.summary.loop_action_reason // "")
+        ]
+      | map(tostring)
+      | join("\u001f")
+    ' "${METRICS_FILE}" 2>/dev/null || true
+  )"
+
+  attention_event_rows="$(
+    jq -r '
+      select((.result // "") != "completed" and (.result // "") != "no_work")
+      | [
+          (.timestamp // "unknown-time"),
+          (.agent_name // "unknown-agent"),
+          (.result // "unknown"),
+          (.issue_id // "none"),
+          (.summary.loop_action_reason // .reason // "unknown")
+        ]
+      | map(tostring)
+      | join("\u001f")
+    ' "${METRICS_FILE}" 2>/dev/null | tail -n "${ORCA_STATUS_RECENT_METRIC_LIMIT}" || true
+  )"
+
+  recent_metrics_rows="$(
+    tail -n "${ORCA_STATUS_RECENT_METRIC_LIMIT}" "${METRICS_FILE}" 2>/dev/null \
+      | jq -r '
+          [
+            (.timestamp // "unknown-time"),
+            (.agent_name // "unknown-agent"),
+            (.issue_id // "none"),
+            (.result // "unknown"),
+            (.reason // "unknown"),
+            ((.durations_seconds.iteration_total // 0) | tostring),
+            (if .tokens_used == null then "n/a" else (.tokens_used | tostring) end)
+          ]
+          | map(tostring)
+          | join("\u001f")
+        ' 2>/dev/null || true
+  )"
+fi
+
+if [[ "${tmux_available}" -eq 1 && "${tmux_count}" -eq 0 ]]; then
+  add_alert "No active tmux sessions with prefix ${SESSION_PREFIX}."
+fi
+
+if [[ "${main_dirty_count}" -gt 0 ]]; then
+  add_alert "Primary repo has ${main_dirty_count} uncommitted path(s)."
+fi
+
+if [[ "${metrics_summary_available}" -eq 1 ]]; then
+  last_age_seconds=""
+  if last_age_seconds="$(timestamp_to_epoch "${last_timestamp}")"; then
+    last_age_seconds="$(( $(date +%s) - last_age_seconds ))"
+    if (( last_age_seconds < 0 )); then
+      last_age_seconds=0
+    fi
+    if (( tmux_count > 0 && last_age_seconds > ORCA_STATUS_STALE_SECONDS )); then
+      add_alert "Last metrics row is stale (${last_age_seconds}s old; threshold ${ORCA_STATUS_STALE_SECONDS}s)."
+    fi
+  fi
+
+  if [[ "${last_result}" != "completed" && "${last_result}" != "no_work" ]]; then
+    issue_display="${last_issue:-none}"
+    add_alert "Most recent run result is ${last_result} (issue=${issue_display}, agent=${last_agent:-unknown-agent})."
+  fi
+fi
+
+echo "== orca health =="
+echo "time: $(date -Iseconds)"
+echo "repo: ${ROOT}"
+if [[ "${tmux_available}" -eq 1 ]]; then
+  echo "sessions (${SESSION_PREFIX}-*): ${tmux_count}"
+else
+  echo "sessions (${SESSION_PREFIX}-*): tmux not installed"
+fi
+echo "agent worktrees: ${agent_worktree_count}"
+echo "primary repo dirty paths: ${main_dirty_count}"
+
+if [[ "${metrics_summary_available}" -eq 1 ]]; then
+  echo "metrics rows: ${total_runs} (completed=${completed_runs}, blocked=${blocked_runs}, failed=${failed_runs}, no_work=${no_work_runs})"
+  echo "last run: $(format_age_from_timestamp "${last_timestamp}") agent=${last_agent:-unknown-agent} result=${last_result:-unknown} issue=${last_issue:-none} duration=$(format_seconds_short "${last_duration}") tokens=${last_tokens:-n/a}"
+else
+  echo "metrics rows: unavailable (${metrics_file_status})"
+fi
+
+if [[ "${#ALERTS[@]}" -eq 0 ]]; then
+  echo "health: OK"
+else
+  echo "health: ATTENTION (${#ALERTS[@]} alert(s))"
+  for alert in "${ALERTS[@]}"; do
+    echo "- ${alert}"
+  done
+fi
+
+echo
+echo "== agent activity =="
+if [[ -n "${agent_activity_rows}" ]]; then
+  while IFS="${FIELD_SEP}" read -r agent_name session_id timestamp result issue_id issue_status duration_s tokens loop_action loop_action_reason; do
+    [[ -z "${agent_name}" ]] && continue
+
+    mapped_session="$(session_name_for_agent "${agent_name}")"
+    session_state="n/a"
+    if [[ -n "${mapped_session}" ]]; then
+      if session_is_up "${mapped_session}"; then
+        session_state="up"
+      else
+        session_state="down"
+      fi
+    fi
+
+    issue_display="${issue_id:-none}"
+    issue_status_display="${issue_status:-n/a}"
+    loop_display="${loop_action:-n/a}"
+    note_display=""
+    if [[ -n "${loop_action_reason}" ]]; then
+      note_display=" note=$(truncate_text "${loop_action_reason}" 96)"
+    fi
+
+    echo "- ${agent_name}: session=${session_state} result=${result:-unknown} issue=${issue_display} issue_status=${issue_status_display} age=$(format_age_from_timestamp "${timestamp}") duration=$(format_seconds_short "${duration_s}") tokens=${tokens} loop=${loop_display}${note_display}"
+  done <<< "${agent_activity_rows}"
+else
+  echo "(no parsed metrics rows)"
+fi
+
+echo
+echo "== attention events (latest ${ORCA_STATUS_RECENT_METRIC_LIMIT}) =="
+if [[ -n "${attention_event_rows}" ]]; then
+  while IFS="${FIELD_SEP}" read -r timestamp agent_name result issue_id reason; do
+    [[ -z "${timestamp}" ]] && continue
+    echo "- ${timestamp} agent=${agent_name} result=${result} issue=${issue_id} reason=$(truncate_text "${reason}" 110)"
+  done <<< "${attention_event_rows}"
+else
+  echo "(none)"
+fi
+
+echo
+echo "== tmux sessions =="
+if [[ "${tmux_available}" -eq 1 ]]; then
+  if [[ -n "${tmux_sessions_verbose}" ]]; then
+    printf '%s\n' "${tmux_sessions_verbose}"
   else
     echo "(none)"
   fi
@@ -29,13 +414,17 @@ fi
 
 echo
 echo "== worktrees =="
-safe_run "git worktree list" git worktree list || true
+if [[ -n "${worktree_list}" ]]; then
+  printf '%s\n' "${worktree_list}"
+else
+  echo "(none)"
+fi
 
 echo
 echo "== currently claimed beads =="
 if command -v bd >/dev/null 2>&1; then
   if claimed_beads_output="$(
-    bd list --status in_progress --sort updated --reverse --limit 20 2>&1
+    bd list --status in_progress --sort updated --reverse --limit "${ORCA_STATUS_CLAIMED_LIMIT}" 2>&1
   )"; then
     if [[ -n "${claimed_beads_output}" ]]; then
       printf '%s\n' "${claimed_beads_output}"
@@ -51,40 +440,34 @@ else
 fi
 
 echo
-echo "== Recently closed beads"
+echo "== recently closed beads =="
 if command -v bd >/dev/null 2>&1; then
-  safe_run "bd list" bd list --status closed --limit 10 || true
+  safe_run "bd list --status closed" bd list --status closed --limit "${ORCA_STATUS_CLOSED_LIMIT}" || true
 else
   echo "(bd not installed)"
 fi
 
 echo
-echo "== beads ready =="
+echo "== bd status =="
 if command -v bd >/dev/null 2>&1; then
-  safe_run "bd ready" bd ready --limit 10 || true
+  safe_run "bd status" bd status || true
 else
   echo "(bd not installed)"
-fi
-
-echo
-echo "== recent logs =="
-ls -1 "${ROOT}/agent-logs" 2>/dev/null || echo "(no logs yet)"
-
-echo
-echo "== recent run summaries =="
-if summary_list="$(ls -1t "${ROOT}"/agent-logs/*-summary.md 2>/dev/null)"; then
-  printf '%s\n' "${summary_list}" | head -n 10 | sed "s#^${ROOT}/##"
-else
-  echo "(no summaries yet)"
 fi
 
 echo
 echo "== latest metrics =="
-if [[ -f "${ROOT}/agent-logs/metrics.jsonl" ]]; then
-  if command -v jq >/dev/null 2>&1; then
-    if ! tail -n 5 "${ROOT}/agent-logs/metrics.jsonl" | jq -r '
+if [[ -f "${METRICS_FILE}" ]]; then
+  if [[ -n "${recent_metrics_rows}" ]]; then
+    while IFS="${FIELD_SEP}" read -r timestamp agent_name issue_id result reason duration_s tokens; do
+      [[ -z "${timestamp}" ]] && continue
+      echo "${timestamp} ($(format_age_from_timestamp "${timestamp}")) agent=${agent_name} issue=${issue_id} result=${result} reason=${reason} total=$(format_seconds_short "${duration_s}") tokens=${tokens}"
+    done <<< "${recent_metrics_rows}"
+  elif command -v jq >/dev/null 2>&1; then
+    if ! tail -n "${ORCA_STATUS_RECENT_METRIC_LIMIT}" "${METRICS_FILE}" | jq -r '
       . as $row
       | ($row.timestamp // "unknown-time")
+        + " agent=" + ($row.agent_name // "unknown-agent")
         + " issue=" + ($row.issue_id // "unknown-issue")
         + " result=" + ($row.result // "unknown")
         + " reason=" + ($row.reason // "unknown")
@@ -97,7 +480,7 @@ if [[ -f "${ROOT}/agent-logs/metrics.jsonl" ]]; then
       echo "(metrics parse failed)"
     fi
   else
-    tail -n 5 "${ROOT}/agent-logs/metrics.jsonl"
+    tail -n "${ORCA_STATUS_RECENT_METRIC_LIMIT}" "${METRICS_FILE}"
   fi
 else
   echo "(no metrics yet)"

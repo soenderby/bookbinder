@@ -161,12 +161,20 @@ Signal handling:
 
 ### `status.sh`
 
-1. prints tmux sessions for `SESSION_PREFIX`
-2. prints git worktrees
-3. prints queue snapshots (`in_progress`, `closed`, `ready`)
-4. lists recent logs and summaries
-5. prints latest metrics rows
-6. does not run repository consistency checks (keeps status minimal)
+1. prints an `orca health` summary (sessions, agent worktrees, primary repo dirty count, metrics rollup)
+2. emits explicit alerts for high-signal conditions (no sessions, stale metrics, non-completed latest run)
+3. prints per-agent latest activity from `metrics.jsonl` (result, issue, age, duration, tokens, loop action)
+4. prints recent attention events (non-`completed` and non-`no_work` runs)
+5. prints tmux sessions and git worktrees
+6. prints queue snapshots (`in_progress`, `closed`) plus `bd status`
+7. prints latest metrics rows with agent and relative age
+
+Tuning knobs:
+
+- `ORCA_STATUS_STALE_SECONDS` (default `900`)
+- `ORCA_STATUS_CLAIMED_LIMIT` (default `20`)
+- `ORCA_STATUS_CLOSED_LIMIT` (default `10`)
+- `ORCA_STATUS_RECENT_METRIC_LIMIT` (default `10`)
 
 ## Error Handling Model
 
