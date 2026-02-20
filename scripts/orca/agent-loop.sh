@@ -245,16 +245,62 @@ next_ready_issue_with_retry() {
   local attempts=1
   local ready_json
   local issue_id
+  local open_children_count
+  local -a ready_ids=()
 
   while [[ "${attempts}" -le "${READY_MAX_ATTEMPTS}" ]]; do
-    if ready_json="$(bd ready --json 2>/dev/null)" && issue_id="$(jq -r '.[0].id // empty' <<<"${ready_json}" 2>/dev/null)"; then
-      printf '%s\n' "${issue_id}"
+    if ready_json="$(bd ready --json 2>/dev/null)" \
+      && mapfile -t ready_ids < <(jq -r '.[].id // empty' <<<"${ready_json}" 2>/dev/null); then
+      if [[ "${#ready_ids[@]}" -eq 0 ]]; then
+        printf '\n'
+        return 0
+      fi
+
+      for issue_id in "${ready_ids[@]}"; do
+        if open_children_count="$(open_child_count_with_retry "${issue_id}")"; then
+          if [[ "${open_children_count}" -gt 0 ]]; then
+            log "skipping ready issue ${issue_id}; ${open_children_count} child issues are still open"
+            continue
+          fi
+        else
+          log "failed to inspect child status for ${issue_id}; treating it as claimable"
+        fi
+
+        printf '%s\n' "${issue_id}"
+        return 0
+      done
+
+      log "ready queue has no claimable leaf issues; exiting this loop pass"
+      printf '\n'
       return 0
     fi
 
     log "failed to poll ready beads (attempt ${attempts}/${READY_MAX_ATTEMPTS}); retrying in ${READY_RETRY_SECONDS}s"
     sleep "${READY_RETRY_SECONDS}"
     attempts=$((attempts + 1))
+  done
+
+  return 1
+}
+
+open_child_count_with_retry() {
+  local issue_id="$1"
+  local attempts=1
+  local max_attempts=3
+  local children_json
+  local open_count
+
+  while [[ "${attempts}" -le "${max_attempts}" ]]; do
+    if children_json="$(bd children "${issue_id}" --json 2>/dev/null)" \
+      && open_count="$(jq -r '[.[] | select(.status != "closed")] | length' <<<"${children_json}" 2>/dev/null)" \
+      && [[ "${open_count}" =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "${open_count}"
+      return 0
+    fi
+
+    log "failed to inspect child status for ${issue_id}; attempt ${attempts}/${max_attempts}"
+    attempts=$((attempts + 1))
+    sleep 2
   done
 
   return 1
@@ -663,6 +709,8 @@ merge_issue_or_return_to_open() {
   local source_commit
   local merge_failure_note
   local close_failure_note
+  local open_children_count
+  local close_guard_note
   local merge_started_epoch
   local close_started_epoch
 
@@ -696,6 +744,28 @@ merge_issue_or_return_to_open() {
   RUN_MERGE_DURATION_SECONDS=$(( $(now_epoch) - merge_started_epoch ))
   RUN_MERGE_STATUS="success"
   log "merge succeeded for ${issue_id}"
+
+  if open_children_count="$(open_child_count_with_retry "${issue_id}")" \
+    && [[ "${open_children_count}" -gt 0 ]]; then
+    close_guard_note="Work for ${issue_id} was merged into ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH} at $(date -Iseconds), but the issue has ${open_children_count} open child issues. Keeping parent issue open until child tasks are closed."
+    close_started_epoch="$(now_epoch)"
+    RUN_CLOSE_DURATION_SECONDS=0
+    if update_issue_to_open_with_retry "${issue_id}" "${close_guard_note}" "close-guard-open-children"; then
+      RUN_CLOSE_DURATION_SECONDS=$(( $(now_epoch) - close_started_epoch ))
+      RUN_CLOSE_STATUS="skipped_open_children"
+      log "merge completed for ${issue_id}; left issue open because ${open_children_count} child issues remain open"
+      current_issue_id=""
+      current_issue_should_reopen=1
+      return 0
+    fi
+
+    RUN_CLOSE_DURATION_SECONDS=$(( $(now_epoch) - close_started_epoch ))
+    RUN_CLOSE_STATUS="failed"
+    log "merge completed for ${issue_id}, but failed to keep issue open while child issues remain; manual intervention needed"
+    current_issue_id=""
+    current_issue_should_reopen=1
+    return 1
+  fi
 
   close_started_epoch="$(now_epoch)"
   if close_issue_if_needed_with_retry "${issue_id}"; then
@@ -865,7 +935,11 @@ while true; do
     if [[ "${stop_after_iteration}" -eq 0 ]]; then
       if merge_issue_or_return_to_open "${issue_id}"; then
         RUN_RESULT_STATUS="success"
-        RUN_RESULT_REASON="merged-and-closed"
+        if [[ "${RUN_CLOSE_STATUS}" == "skipped_open_children" ]]; then
+          RUN_RESULT_REASON="merged-parent-left-open"
+        else
+          RUN_RESULT_REASON="merged-and-closed"
+        fi
       else
         if [[ "${RUN_MERGE_STATUS}" == "failed" ]]; then
           RUN_RESULT_STATUS="failed"

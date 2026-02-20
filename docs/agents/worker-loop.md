@@ -37,6 +37,8 @@ Rules:
 1. One active issue per agent.
 2. Do not edit files outside your claimed issue scope.
 3. If you discover a cross-issue dependency, create/update beads before coding further.
+4. Prefer leaf tasks over parent issues (feature/epic/chore with child tasks).
+5. Do not close a parent issue while any child issue is still open.
 
 ## 3. Implement the Task
 

@@ -13,6 +13,7 @@ This directory contains the Orca multi-agent orchestration scripts.
 - `stop`
 - `status`
 - `setup-worktrees [count]`
+- `audit-consistency`
 
 ## TODO
 In no particular order:
@@ -41,6 +42,7 @@ Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per ag
 - `agent-loop.sh`: per-agent loop for claiming and processing beads tasks
 - `merge-after-run.sh`: lock-protected integration step to merge completed agent branch work into target branch
 - `status.sh`: displays sessions, worktrees, and recent activity
+- `audit-consistency.sh`: validates parent/child status consistency in beads
 - `stop.sh`: stops active agent sessions
 - `AGENT_PROMPT.md`: prompt template used by `agent-loop.sh`
 
@@ -51,12 +53,14 @@ Each iteration follows this flow:
 1. Pre-sync guardrail: verify expected branch and clean worktree (`git status --porcelain` empty).
 2. Sync: run `git pull --rebase --autostash` then `bd sync`; retry bounded times on failure and continue loop with backoff if sync is still unavailable.
    - if pull fails because upstream ref is missing, the loop tries `git push -u` to restore the worker branch upstream.
-3. Poll queue: call `bd ready --json` with bounded retries and backoff.
+3. Poll queue: call `bd ready --json` with bounded retries and backoff, then prefer claimable leaf issues.
+   - ready parent issues with open child tasks are skipped automatically.
 4. Claim work: attempt atomic claim via `bd update <id> --claim`; if claim race is lost, retry later.
 5. Run agent: render `AGENT_PROMPT.md` placeholders and run `AGENT_COMMAND`, logging to a per-run file.
 6. Post-agent handling: on success, re-check branch/cleanliness, apply minimal-closeout policy checks, and run `merge-after-run.sh`; on failure, return issue to `open` with notes.
    - merge step requires the agent run HEAD commit to be present on `origin/swarm/agent-N` before integration.
-7. Close issue after merge: close the bead only if merge succeeded (legacy prompt behavior where the issue is already closed is tolerated).
+7. Close issue after merge: close the bead only if merge succeeded and the issue has no open child tasks.
+   - if child tasks are still open, the parent issue is explicitly kept open with an audit note.
 8. Post-sync guardrail: re-run the same fail-fast sync path as step 2.
 9. Exit conditions: no ready issues, `MAX_RUNS` reached, or hard guard/merge-finalization failure.
 
@@ -119,7 +123,8 @@ Observability behavior:
 4. prints available log filenames under `agent-logs/`
 5. prints recent summary files (`*-summary.md`)
 6. prints latest metrics rows (`agent-logs/metrics.jsonl`)
-7. uses `safe_run` wrappers so partial command failures do not crash status output
+7. runs `scripts/orca/audit-consistency.sh` to surface tracker drift
+8. uses `safe_run` wrappers so partial command failures do not crash status output
 
 ### `stop.sh`
 

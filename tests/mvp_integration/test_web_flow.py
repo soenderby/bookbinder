@@ -7,10 +7,18 @@ import time
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 from pypdf import PdfWriter
+from starlette.datastructures import UploadFile
 
-from bookbinder.web.app import create_app
+from bookbinder.web.app import (
+    ImpositionOptions,
+    _impose_payload,
+    _parse_form_input,
+    _resolve_legacy_artifact_path,
+    _resolve_request_artifact_path,
+    _validate_upload_metadata,
+)
 
 pytestmark = pytest.mark.mvp_integration
 
@@ -27,58 +35,82 @@ def _pdf_bytes(page_count: int, *, encrypted: bool = False) -> bytes:
     return payload.getvalue()
 
 
-def _extract_download_url(response_text: str) -> str:
-    match = re.search(r'href="(/download/[^"]+)"', response_text)
-    assert match is not None
-    return match.group(1)
-
-
-def _post_impose(client: TestClient, *, filename: str = "input.pdf") -> tuple[int, str]:
-    response = client.post(
-        "/impose",
-        data={
-            "paper_size": "A4",
-            "signature_length": "6",
-            "flyleafs": "0",
-        },
-        files={"file": (filename, _pdf_bytes(9), "application/pdf")},
+def _default_options() -> ImpositionOptions:
+    options, _, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=6,
+        flyleafs=0,
+        duplex_rotate=False,
     )
-    return response.status_code, response.text
+    assert error is None
+    return options
+
+
+def _request_parts(download_url: str) -> tuple[str, str]:
+    parts = download_url.split("/", 3)
+    assert len(parts) == 4
+    _, _, request_id, filename = parts
+    return request_id, filename
 
 
 def test_upload_generate_and_download(tmp_path: Path) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
+    options = _default_options()
+    source_name, upload_error = _validate_upload_metadata(
+        UploadFile(filename="input.pdf", file=io.BytesIO(b"placeholder"))
+    )
+    assert upload_error is None
+    assert source_name == "input.pdf"
 
-    status_code, response_text = _post_impose(client)
+    result, impose_error = _impose_payload(
+        payload=_pdf_bytes(9),
+        source_name=source_name,
+        options=options,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
 
-    assert status_code == 200
-    assert "Imposition complete." in response_text
+    assert impose_error is None
+    assert result is not None
+    assert result["status"] == "success"
+    assert "Imposition complete." in result["message"]
 
-    download_url = _extract_download_url(response_text)
+    download_url = result["download_url"]
     assert re.fullmatch(r"/download/[a-f0-9]{32}/[^/]+", download_url)
-
-    download_response = client.get(download_url)
-    assert download_response.status_code == 200
-    assert download_response.headers["content-type"].startswith("application/pdf")
+    request_id, filename = _request_parts(download_url)
+    resolved = _resolve_request_artifact_path(tmp_path, request_id, filename)
+    assert resolved.is_file()
+    assert resolved.suffix.lower() == ".pdf"
 
 
 def test_same_filename_uploads_get_unique_request_scoped_artifacts(tmp_path: Path) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
+    options = _default_options()
+    payload = _pdf_bytes(9)
 
-    first_status, first_text = _post_impose(client, filename="shared.pdf")
-    second_status, second_text = _post_impose(client, filename="shared.pdf")
+    first_result, first_error = _impose_payload(
+        payload=payload,
+        source_name="shared.pdf",
+        options=options,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
+    second_result, second_error = _impose_payload(
+        payload=payload,
+        source_name="shared.pdf",
+        options=options,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
 
-    assert first_status == 200
-    assert second_status == 200
+    assert first_error is None
+    assert second_error is None
+    assert first_result is not None
+    assert second_result is not None
+    assert first_result["download_url"] != second_result["download_url"]
 
-    first_download = _extract_download_url(first_text)
-    second_download = _extract_download_url(second_text)
-    assert first_download != second_download
-
-    assert client.get(first_download).status_code == 200
-    assert client.get(second_download).status_code == 200
+    first_request_id, first_filename = _request_parts(first_result["download_url"])
+    second_request_id, second_filename = _request_parts(second_result["download_url"])
+    assert _resolve_request_artifact_path(tmp_path, first_request_id, first_filename).is_file()
+    assert _resolve_request_artifact_path(tmp_path, second_request_id, second_filename).is_file()
 
     generated_artifacts = list(tmp_path.glob("*/*.pdf"))
     assert len(generated_artifacts) == 2
@@ -86,34 +118,46 @@ def test_same_filename_uploads_get_unique_request_scoped_artifacts(tmp_path: Pat
 
 @pytest.mark.parametrize("request_id", ["invalid", "abc", "g" * 32, "A" * 32])
 def test_download_rejects_invalid_request_id(tmp_path: Path, request_id: str) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
+    with pytest.raises(HTTPException) as exc_info:
+        _resolve_request_artifact_path(tmp_path, request_id, "output.pdf")
 
-    response = client.get(f"/download/{request_id}/output.pdf")
-
-    assert response.status_code == 400
-    assert response.json() == {"detail": "Invalid request id"}
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Invalid request id"
 
 
 @pytest.mark.parametrize("filename", ["nested/secret.pdf", "nested/inner/secret.pdf"])
 def test_download_rejects_path_traversal_filename(tmp_path: Path, filename: str) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
+    with pytest.raises(HTTPException) as exc_info:
+        _resolve_request_artifact_path(tmp_path, "a" * 32, filename)
 
-    response = client.get(f"/download/{'a' * 32}/{filename}")
-
-    assert response.status_code == 400
-    assert response.json() == {"detail": "Invalid filename"}
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Invalid filename"
 
 
 def test_download_request_artifact_missing_returns_404(tmp_path: Path) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
+    with pytest.raises(HTTPException) as exc_info:
+        _resolve_request_artifact_path(tmp_path, "a" * 32, "missing.pdf")
 
-    response = client.get(f"/download/{'a' * 32}/missing.pdf")
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "File not found"
 
-    assert response.status_code == 404
-    assert response.json() == {"detail": "File not found"}
+
+def test_legacy_download_path_resolution_and_errors(tmp_path: Path) -> None:
+    legacy_file = tmp_path / "legacy.pdf"
+    legacy_file.write_bytes(b"legacy")
+
+    resolved = _resolve_legacy_artifact_path(tmp_path, "legacy.pdf")
+    assert resolved == legacy_file
+
+    with pytest.raises(HTTPException) as missing_exc:
+        _resolve_legacy_artifact_path(tmp_path, "missing.pdf")
+    assert missing_exc.value.status_code == 404
+    assert missing_exc.value.detail == "File not found"
+
+    with pytest.raises(HTTPException) as invalid_exc:
+        _resolve_legacy_artifact_path(tmp_path, "../legacy.pdf")
+    assert invalid_exc.value.status_code == 400
+    assert invalid_exc.value.detail == "Invalid filename"
 
 
 def test_cleanup_removes_stale_generated_artifacts(tmp_path: Path) -> None:
@@ -133,84 +177,68 @@ def test_cleanup_removes_stale_generated_artifacts(tmp_path: Path) -> None:
     os.utime(stale_request_file, (stale_timestamp, stale_timestamp))
     os.utime(stale_legacy_file, (stale_timestamp, stale_timestamp))
 
-    app = create_app(artifact_dir=tmp_path, artifact_retention_seconds=60)
-    client = TestClient(app)
+    result, impose_error = _impose_payload(
+        payload=_pdf_bytes(9),
+        source_name="input.pdf",
+        options=_default_options(),
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=60,
+    )
 
-    status_code, response_text = _post_impose(client)
-    assert status_code == 200
-    assert "Imposition complete." in response_text
+    assert impose_error is None
+    assert result is not None
+    assert result["status"] == "success"
 
     assert not stale_request_dir.exists()
     assert not stale_legacy_file.exists()
     assert fresh_marker_file.exists()
 
 
-def test_reject_non_pdf_upload(tmp_path: Path) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
-
-    response = client.post(
-        "/impose",
-        data={
-            "paper_size": "A4",
-            "signature_length": "6",
-            "flyleafs": "0",
-        },
-        files={"file": ("input.txt", b"not a pdf", "text/plain")},
+def test_reject_non_pdf_upload() -> None:
+    source_name, error = _validate_upload_metadata(
+        UploadFile(filename="input.txt", file=io.BytesIO(b"not a pdf"))
     )
+    assert source_name is None
+    assert error == "Only .pdf uploads are supported."
 
-    assert response.status_code == 400
-    assert "Only .pdf uploads are supported." in response.text
 
-
-def test_reject_missing_upload(tmp_path: Path) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
-
-    response = client.post(
-        "/impose",
-        data={
-            "paper_size": "A4",
-            "signature_length": "6",
-            "flyleafs": "0",
-        },
-    )
-
-    assert response.status_code == 400
-    assert "Upload a PDF file to continue." in response.text
+def test_reject_missing_upload() -> None:
+    source_name, error = _validate_upload_metadata(None)
+    assert source_name is None
+    assert error == "Upload a PDF file to continue."
 
 
 def test_reject_empty_pdf_upload(tmp_path: Path) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
-
-    response = client.post(
-        "/impose",
-        data={
-            "paper_size": "A4",
-            "signature_length": "6",
-            "flyleafs": "0",
-        },
-        files={"file": ("empty.pdf", b"", "application/pdf")},
+    result, error = _impose_payload(
+        payload=b"",
+        source_name="empty.pdf",
+        options=_default_options(),
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
     )
-
-    assert response.status_code == 400
-    assert "The uploaded file is empty." in response.text
+    assert result is None
+    assert error == "The uploaded file is empty."
 
 
 def test_reject_encrypted_pdf_upload(tmp_path: Path) -> None:
-    app = create_app(artifact_dir=tmp_path)
-    client = TestClient(app)
-
-    response = client.post(
-        "/impose",
-        data={
-            "paper_size": "A4",
-            "signature_length": "6",
-            "flyleafs": "0",
-        },
-        files={"file": ("locked.pdf", _pdf_bytes(4, encrypted=True), "application/pdf")},
+    result, error = _impose_payload(
+        payload=_pdf_bytes(4, encrypted=True),
+        source_name="locked.pdf",
+        options=_default_options(),
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
     )
+    assert result is None
+    assert error is not None
+    assert "Encrypted PDFs are not supported for MVP" in error
 
-    assert response.status_code == 400
-    assert "Encrypted PDFs are not supported for MVP" in response.text
+
+def test_parse_form_input_rejects_invalid_paper_size() -> None:
+    _, form_values, error = _parse_form_input(
+        paper_size="Tabloid",
+        signature_length=6,
+        flyleafs=0,
+        duplex_rotate=False,
+    )
+    assert form_values["paper_size"] == "Tabloid"
+    assert error == "Invalid paper size. Choose A4 or Letter."

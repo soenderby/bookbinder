@@ -102,3 +102,13 @@ if [[ -f "${ROOT}/agent-logs/metrics.jsonl" ]]; then
 else
   echo "(no metrics yet)"
 fi
+
+echo
+echo "== consistency audit =="
+if [[ -x "${ROOT}/scripts/orca/audit-consistency.sh" ]]; then
+  if ! "${ROOT}/scripts/orca/audit-consistency.sh"; then
+    echo "(consistency audit reported issues)" >&2
+  fi
+else
+  echo "(audit script not found)"
+fi

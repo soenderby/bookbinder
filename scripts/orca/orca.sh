@@ -13,6 +13,7 @@ Commands:
   start [count] [--runs N|--continuous] [--reasoning-level LEVEL]
   stop
   status
+  audit-consistency
   setup-worktrees [count]
 USAGE
 }
@@ -31,6 +32,9 @@ case "${subcommand}" in
     ;;
   status)
     exec "${SCRIPT_DIR}/status.sh" "$@"
+    ;;
+  audit-consistency|audit)
+    exec "${SCRIPT_DIR}/audit-consistency.sh" "$@"
     ;;
   setup-worktrees|setup)
     exec "${SCRIPT_DIR}/setup-worktrees.sh" "$@"

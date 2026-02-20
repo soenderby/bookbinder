@@ -8,11 +8,12 @@ Use the swarm to drain ready unblocked beads tasks in parallel, or run bounded b
 
 Each loop:
 1. reads ready work from beads
-2. claims exactly one issue atomically
-3. runs one autonomous agent pass for that issue
-4. merges the worker branch into `main` using a global merge lock
-5. closes the issue only after merge succeeds
-6. continues while work exists and exits when no ready tasks remain (or run limit is reached)
+2. skips ready parent issues that still have open child tasks
+3. claims exactly one issue atomically
+4. runs one autonomous agent pass for that issue
+5. merges the worker branch into `main` using a global merge lock
+6. closes the issue only after merge succeeds and all child tasks are closed
+7. continues while work exists and exits when no ready tasks remain (or run limit is reached)
 
 ## 2. Prerequisites
 
@@ -65,6 +66,7 @@ bd sync
 
 # Verify health
 ./bb orca status
+./bb orca audit-consistency
 ```
 
 If sessions already exist, `./bb orca start` leaves them running.
@@ -221,11 +223,12 @@ Planned future change (not active yet):
 ## 11. Useful Command Cheat Sheet
 
 ```bash
-# setup/start/stop/status
+# setup/start/stop/status/audit
 ./bb orca setup-worktrees 2
 ./bb orca start 2 --continuous
 ./bb orca stop
 ./bb orca status
+./bb orca audit-consistency
 
 # tmux
 tmux ls

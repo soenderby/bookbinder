@@ -7,7 +7,7 @@ This is a minimal starting point for running multiple agent loops in parallel.
 1. Persistent git worktrees (`worktrees/agent-1`, `worktrees/agent-2`, ...)
 2. One loop process per worktree (inside tmux sessions)
 3. Beads-based coordination (`bd ready` + atomic `bd update --claim`)
-4. Basic operational scripts (setup/start/stop/status)
+4. Basic operational scripts (setup/start/stop/status/audit-consistency)
 
 Scripts are in `scripts/orca/`, with `./bb orca` as the preferred entrypoint.
 
@@ -28,6 +28,9 @@ From repo root:
 # 3) Check swarm status
 ./bb orca status
 
+# Optional: run explicit tracker consistency audit
+./bb orca audit-consistency
+
 # 4) Stop all loops
 ./bb orca stop
 ```
@@ -37,11 +40,12 @@ From repo root:
 Each loop:
 1. syncs git/beads
 2. asks for unblocked work (`bd ready --json`)
-3. attempts atomic claim (`bd update <id> --claim`)
-4. runs one autonomous agent pass for that issue
-5. serializes merge into `main` after a successful run
-6. closes the issue only after merge succeeds
-7. continues while work exists; exits when queue is empty (or run limit is reached)
+3. skips ready parent issues that still have open child tasks
+4. attempts atomic claim (`bd update <id> --claim`)
+5. runs one autonomous agent pass for that issue
+6. serializes merge into `main` after a successful run
+7. closes the issue only after merge succeeds and child tasks are closed
+8. continues while work exists; exits when queue is empty (or run limit is reached)
 
 Only one loop can claim a given issue, which prevents duplicate work.
 
