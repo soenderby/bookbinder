@@ -5,7 +5,7 @@ import logging
 import re
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -24,7 +24,9 @@ from bookbinder.constants import (
 )
 from bookbinder.imposition.core import build_ordered_pages, split_signatures
 from bookbinder.imposition.pdf_writer import (
+    deterministic_preview_filename,
     deterministic_output_filename,
+    write_first_sheet_preview,
     write_duplex_aggregated_pdf,
 )
 
@@ -203,18 +205,30 @@ def _impose_payload(
     request_artifact_dir = artifact_dir / request_id
     output_name = deterministic_output_filename(source_name)
     output_path = request_artifact_dir / output_name
+    preview_name = deterministic_preview_filename(source_name)
+    preview_path = request_artifact_dir / preview_name
+    custom_dimensions = (
+        None
+        if options.custom_width_points is None or options.custom_height_points is None
+        else (options.custom_width_points, options.custom_height_points)
+    )
+
     try:
+        preview_artifact = write_first_sheet_preview(
+            reader,
+            signatures=signatures,
+            output_path=preview_path,
+            paper_size=options.paper_size,
+            duplex_rotate=options.duplex_rotate,
+            custom_dimensions=custom_dimensions,
+        )
         artifact = write_duplex_aggregated_pdf(
             reader,
             signatures=signatures,
             output_path=output_path,
             paper_size=options.paper_size,
             duplex_rotate=options.duplex_rotate,
-            custom_dimensions=(
-                None
-                if options.custom_width_points is None or options.custom_height_points is None
-                else (options.custom_width_points, options.custom_height_points)
-            ),
+            custom_dimensions=custom_dimensions,
         )
     except ValueError as exc:
         _log_event(
@@ -253,6 +267,15 @@ def _impose_payload(
         "download_url": f"/download/{request_id}/{output_name}",
         "output_filename": output_name,
         "output_pages": artifact.page_count,
+        "preview_download_url": f"/download/{request_id}/{preview_name}",
+        "preview_filename": preview_name,
+        "preview_pages": preview_artifact.page_count,
+        "preview_sheet": {
+            "placed_tokens": list(preview_artifact.placed_tokens),
+            "output_width": preview_artifact.output_width,
+            "output_height": preview_artifact.output_height,
+            "slots": [asdict(slot) for slot in preview_artifact.slots],
+        },
     }, None
 
 
