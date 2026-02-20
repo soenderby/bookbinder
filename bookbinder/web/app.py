@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import shutil
 import time
@@ -31,6 +32,7 @@ _REQUEST_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 _EXPIRED_ARTIFACT_MESSAGE = "This download link has expired after cleanup. Regenerate the PDF to create a new link."
 _CUSTOM_PAPER_SIZE = "Custom"
 _POINTS_PER_MM = 72.0 / 25.4
+_LOGGER = logging.getLogger("bookbinder.web")
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,14 @@ class ImpositionOptions:
     duplex_rotate: bool
     custom_width_points: float | None
     custom_height_points: float | None
+
+
+def _log_event(level: int, event_name: str, **event_fields: Any) -> None:
+    _LOGGER.log(
+        level,
+        event_name,
+        extra={"event_name": event_name, "event_fields": event_fields},
+    )
 
 
 def _cleanup_stale_artifacts(
@@ -158,23 +168,33 @@ def _impose_payload(
     options: ImpositionOptions,
     artifact_dir: Path,
     artifact_retention_seconds: int,
+    job_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     if not payload:
+        _log_event(logging.WARNING, "impose.job.empty_upload", job_id=job_id, source_name=source_name)
         return None, "The uploaded file is empty."
 
     try:
         reader = PdfReader(io.BytesIO(payload))
     except PdfReadError:
-        return None, "The file could not be read as a valid PDF."
+        _log_event(
+            logging.WARNING,
+            "impose.job.invalid_pdf",
+            job_id=job_id,
+            source_name=source_name,
+            payload_bytes=len(payload),
+        )
+        return None, "The upload could not be parsed as a PDF. Verify the file is a valid, non-corrupted PDF and retry."
 
     if reader.is_encrypted:
+        _log_event(logging.WARNING, "impose.job.encrypted_pdf", job_id=job_id, source_name=source_name)
         return None, "Encrypted PDFs are not supported for MVP. Remove encryption and retry."
 
     source_pages = list(range(len(reader.pages)))
     ordered_pages = build_ordered_pages(source_pages, flyleaf_sets=options.flyleafs)
     signatures = split_signatures(ordered_pages, sig_length_sheets=options.signature_length)
 
-    _cleanup_stale_artifacts(
+    removed = _cleanup_stale_artifacts(
         artifact_dir,
         retention_seconds=artifact_retention_seconds,
     )
@@ -183,17 +203,48 @@ def _impose_payload(
     request_artifact_dir = artifact_dir / request_id
     output_name = deterministic_output_filename(source_name)
     output_path = request_artifact_dir / output_name
-    artifact = write_duplex_aggregated_pdf(
-        reader,
-        signatures=signatures,
-        output_path=output_path,
-        paper_size=options.paper_size,
-        duplex_rotate=options.duplex_rotate,
-        custom_dimensions=(
-            None
-            if options.custom_width_points is None or options.custom_height_points is None
-            else (options.custom_width_points, options.custom_height_points)
-        ),
+    try:
+        artifact = write_duplex_aggregated_pdf(
+            reader,
+            signatures=signatures,
+            output_path=output_path,
+            paper_size=options.paper_size,
+            duplex_rotate=options.duplex_rotate,
+            custom_dimensions=(
+                None
+                if options.custom_width_points is None or options.custom_height_points is None
+                else (options.custom_width_points, options.custom_height_points)
+            ),
+        )
+    except ValueError as exc:
+        _log_event(
+            logging.WARNING,
+            "impose.job.unsupported_options",
+            job_id=job_id,
+            source_name=source_name,
+            error=str(exc),
+        )
+        return None, f"Unsupported options for imposition: {exc}."
+    except Exception:
+        _LOGGER.exception(
+            "impose.job.unexpected_failure",
+            extra={
+                "event_name": "impose.job.unexpected_failure",
+                "event_fields": {"job_id": job_id, "source_name": source_name},
+            },
+        )
+        return None, "Imposition failed unexpectedly. Retry and check server logs for the associated job."
+
+    _log_event(
+        logging.INFO,
+        "impose.job.completed",
+        job_id=job_id,
+        request_id=request_id,
+        source_name=source_name,
+        source_pages=len(source_pages),
+        output_pages=artifact.page_count,
+        signatures=len(signatures),
+        stale_artifacts_removed=removed,
     )
 
     return {
@@ -207,15 +258,18 @@ def _impose_payload(
 
 def _resolve_request_artifact_path(artifact_dir: Path, request_id: str, filename: str) -> Path:
     if _REQUEST_ID_PATTERN.fullmatch(request_id) is None:
+        _log_event(logging.WARNING, "download.request.invalid_request_id", request_id=request_id, filename=filename)
         raise HTTPException(status_code=400, detail="Invalid request id")
 
     safe_name = _validated_filename(filename)
     request_artifact_dir = artifact_dir / request_id
     if not request_artifact_dir.is_dir():
+        _log_event(logging.WARNING, "download.request.expired", request_id=request_id, filename=safe_name)
         raise HTTPException(status_code=410, detail=_EXPIRED_ARTIFACT_MESSAGE)
 
     file_path = request_artifact_dir / safe_name
     if not file_path.is_file():
+        _log_event(logging.WARNING, "download.request.missing_file", request_id=request_id, filename=safe_name)
         raise HTTPException(status_code=404, detail="File not found")
 
     return file_path
@@ -225,6 +279,7 @@ def _resolve_legacy_artifact_path(artifact_dir: Path, filename: str) -> Path:
     safe_name = _validated_filename(filename)
     file_path = artifact_dir / safe_name
     if not file_path.is_file():
+        _log_event(logging.WARNING, "download.legacy.missing_file", filename=safe_name)
         raise HTTPException(status_code=404, detail="File not found")
 
     return file_path
@@ -296,6 +351,17 @@ def create_app(
         custom_width_mm: str = Form(""),
         custom_height_mm: str = Form(""),
     ) -> HTMLResponse:
+        job_id = uuid4().hex
+        _log_event(
+            logging.INFO,
+            "impose.request.received",
+            job_id=job_id,
+            paper_size=paper_size,
+            signature_length=signature_length,
+            flyleafs=flyleafs,
+            duplex_rotate=duplex_rotate,
+            has_upload=file is not None and bool(file.filename),
+        )
         options, form_values, form_error = _parse_form_input(
             paper_size=paper_size,
             signature_length=signature_length,
@@ -305,6 +371,7 @@ def create_app(
             custom_height_mm=custom_height_mm,
         )
         if form_error is not None:
+            _log_event(logging.WARNING, "impose.request.form_validation_failed", job_id=job_id, error=form_error)
             return render_index(
                 request,
                 result={"status": "error", "message": form_error},
@@ -314,6 +381,7 @@ def create_app(
 
         source_name, upload_error = _validate_upload_metadata(file)
         if upload_error is not None:
+            _log_event(logging.WARNING, "impose.request.upload_validation_failed", job_id=job_id, error=upload_error)
             return render_index(
                 request,
                 result={"status": "error", "message": upload_error},
@@ -322,6 +390,7 @@ def create_app(
             )
 
         if file is None or source_name is None:
+            _log_event(logging.WARNING, "impose.request.upload_missing", job_id=job_id)
             return render_index(
                 request,
                 result={"status": "error", "message": "Upload a PDF file to continue."},
@@ -336,8 +405,10 @@ def create_app(
             options=options,
             artifact_dir=app.state.artifact_dir,
             artifact_retention_seconds=app.state.artifact_retention_seconds,
+            job_id=job_id,
         )
         if impose_error is not None:
+            _log_event(logging.WARNING, "impose.request.failed", job_id=job_id, source_name=source_name, error=impose_error)
             return render_index(
                 request,
                 result={"status": "error", "message": impose_error},
@@ -346,6 +417,7 @@ def create_app(
             )
 
         if result is None:
+            _log_event(logging.ERROR, "impose.request.missing_result", job_id=job_id, source_name=source_name)
             return render_index(
                 request,
                 result={"status": "error", "message": "Imposition failed."},
@@ -353,6 +425,15 @@ def create_app(
                 status_code=500,
             )
 
+        _log_event(
+            logging.INFO,
+            "impose.request.succeeded",
+            job_id=job_id,
+            source_name=source_name,
+            output_filename=result["output_filename"],
+            output_pages=result["output_pages"],
+            download_url=result["download_url"],
+        )
         return render_index(request, result=result, form_values=form_values)
 
     @app.get("/download/{request_id}/{filename:path}")

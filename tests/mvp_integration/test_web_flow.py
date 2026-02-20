@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import re
 import time
@@ -84,6 +85,30 @@ def test_upload_generate_and_download(tmp_path: Path) -> None:
     resolved = _resolve_request_artifact_path(tmp_path, request_id, filename)
     assert resolved.is_file()
     assert resolved.suffix.lower() == ".pdf"
+
+
+def test_impose_payload_emits_structured_success_log(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="bookbinder.web")
+    options = _default_options()
+
+    result, impose_error = _impose_payload(
+        payload=_pdf_bytes(9),
+        source_name="input.pdf",
+        options=options,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+        job_id="job-123",
+    )
+
+    assert impose_error is None
+    assert result is not None
+    events = [record for record in caplog.records if getattr(record, "event_name", "") == "impose.job.completed"]
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_fields["job_id"] == "job-123"
+    assert event.event_fields["source_name"] == "input.pdf"
+    assert event.event_fields["output_pages"] == result["output_pages"]
+    assert re.fullmatch(r"[a-f0-9]{32}", event.event_fields["request_id"])
 
 
 def test_upload_generate_with_custom_dimensions(tmp_path: Path) -> None:
@@ -348,6 +373,29 @@ def test_reject_empty_pdf_upload(tmp_path: Path) -> None:
     )
     assert result is None
     assert error == "The uploaded file is empty."
+
+
+def test_reject_invalid_pdf_upload_logs_actionable_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="bookbinder.web")
+    result, error = _impose_payload(
+        payload=b"not a pdf",
+        source_name="broken.pdf",
+        options=_default_options(),
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+        job_id="job-invalid",
+    )
+
+    assert result is None
+    assert error == "The upload could not be parsed as a PDF. Verify the file is a valid, non-corrupted PDF and retry."
+    events = [record for record in caplog.records if getattr(record, "event_name", "") == "impose.job.invalid_pdf"]
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_fields["job_id"] == "job-invalid"
+    assert event.event_fields["source_name"] == "broken.pdf"
+    assert event.event_fields["payload_bytes"] == len(b"not a pdf")
 
 
 def test_reject_encrypted_pdf_upload(tmp_path: Path) -> None:
