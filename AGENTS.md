@@ -12,6 +12,14 @@ bd close <id>         # Complete work
 bd sync               # Sync with git
 ```
 
+## Worker Bootstrap Check
+
+Before running quality gates in a worktree, verify imports resolve to the active checkout:
+
+```bash
+python -c "from pathlib import Path; import bookbinder; from bookbinder.web.app import create_app; root=Path('.').resolve(); assert root in Path(bookbinder.__file__).resolve().parents; assert root in Path(create_app.__code__.co_filename).resolve().parents; print('import paths ok')"
+```
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
@@ -37,4 +45,3 @@ bd sync               # Sync with git
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
-
