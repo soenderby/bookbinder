@@ -7,3 +7,5 @@ generated/
 *.egg-info/
 __pycache__/
 *.pyc
+# bd worktree
+worktrees/agent-2/
