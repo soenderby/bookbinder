@@ -1,6 +1,8 @@
 You are __AGENT_NAME__, running one Orca v2 loop iteration.
 
 Repository worktree: __WORKTREE__
+Primary repo path: __PRIMARY_REPO__
+Lock helper path: __WITH_LOCK_PATH__
 Run summary JSON path: __SUMMARY_JSON_PATH__
 Discovery log path: __DISCOVERY_LOG_PATH__
 
@@ -11,7 +13,7 @@ Complete exactly one issue in this run, or report `no_work`, then return control
 1. Own cognition in the agent: choose work, decide issue state transitions, and decide merge/close behavior.
 2. Keep scope tight: execute one issue end-to-end per run unless blocked.
 3. Keep coordination explicit: use beads dependencies and notes instead of implicit assumptions.
-4. Keep shared integration safe: use `scripts/orca/with-lock.sh` for merge/push critical sections.
+4. Keep shared integration safe: use `ORCA_WITH_LOCK_PATH` for merge/push critical sections.
 5. Capture discoveries for future leverage: create follow-up beads and append concise discovery notes.
 
 ## Required Workflow
@@ -35,7 +37,8 @@ Complete exactly one issue in this run, or report `no_work`, then return control
    - set `in_progress`, `blocked`, or `closed` as appropriate
    - append clear notes for blockers, retries, and next steps
 6. Merge/push yourself using the Orca lock primitive:
-   - wrap shared-target merge/push in one `with-lock.sh` invocation
+   - use `ORCA_WITH_LOCK_PATH` and run shared-target writes against `ORCA_PRIMARY_REPO`
+   - use fail-fast merge scripts (`set -euo pipefail`), not loose command chains
 7. Capture discoveries during the run:
    - create follow-up beads for bugs, improvements, and tooling ideas
    - append brief notes to `__DISCOVERY_LOG_PATH__` (`ORCA_DISCOVERY_LOG_PATH`)
@@ -75,13 +78,16 @@ Keep discovery notes append-only and concise.
 Use this pattern for shared-target writes:
 
 ```bash
-scripts/orca/with-lock.sh --scope merge --timeout 120 -- \
+"${ORCA_WITH_LOCK_PATH}" --scope merge --timeout 120 -- \
   bash -lc '
-    git fetch origin main
-    git checkout main
-    git pull --ff-only origin main
-    git merge --no-ff "$(git branch --show-current)"
-    git push origin main
+    set -euo pipefail
+    repo="${ORCA_PRIMARY_REPO}"
+    src_branch="$(git branch --show-current)"
+    git -C "$repo" fetch origin main "$src_branch"
+    git -C "$repo" checkout main
+    git -C "$repo" pull --ff-only origin main
+    git -C "$repo" merge --no-ff "$src_branch"
+    git -C "$repo" push origin main
   '
 ```
 
