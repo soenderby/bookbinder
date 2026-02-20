@@ -109,11 +109,50 @@ def test_download_rejects_path_traversal_filename(tmp_path: Path, filename: str)
 def test_download_request_artifact_missing_returns_404(tmp_path: Path) -> None:
     app = create_app(artifact_dir=tmp_path)
     client = TestClient(app)
+    request_dir = tmp_path / ("a" * 32)
+    request_dir.mkdir()
 
     response = client.get(f"/download/{'a' * 32}/missing.pdf")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "File not found"}
+
+
+def test_download_expired_request_artifact_returns_actionable_410(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    status_code, response_text = _post_impose(client)
+    assert status_code == 200
+
+    download_url = _extract_download_url(response_text)
+    request_dir = tmp_path / download_url.split("/")[2]
+    assert request_dir.is_dir()
+
+    # Simulate cleanup removing the request-scoped artifact directory.
+    for child in request_dir.iterdir():
+        child.unlink()
+    request_dir.rmdir()
+
+    expired_response = client.get(download_url)
+    assert expired_response.status_code == 410
+    assert expired_response.json() == {
+        "detail": "This download link has expired after cleanup. Regenerate the PDF to create a new link."
+    }
+
+
+def test_download_expired_request_artifact_renders_ui_guidance_for_html_clients(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get(
+        f"/download/{'a' * 32}/missing.pdf",
+        headers={"accept": "text/html"},
+    )
+
+    assert response.status_code == 410
+    assert "This download link has expired after cleanup." in response.text
+    assert "Regenerate the PDF to create a new link." in response.text
 
 
 def test_cleanup_removes_stale_generated_artifacts(tmp_path: Path) -> None:
