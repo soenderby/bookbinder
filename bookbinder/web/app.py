@@ -24,9 +24,11 @@ from bookbinder.constants import (
 )
 from bookbinder.imposition.core import build_ordered_pages, split_signatures
 from bookbinder.imposition.pdf_writer import (
+    _POSITIONING_MODES,
     _SCALING_MODES,
     deterministic_preview_filename,
     deterministic_output_filename,
+    resolve_positioning_mode,
     write_first_sheet_preview,
     write_duplex_aggregated_pdf,
 )
@@ -52,6 +54,7 @@ class ImpositionOptions:
     custom_width_points: float | None
     custom_height_points: float | None
     scaling_mode: str
+    positioning_mode: str
     output_mode: OutputMode
 
 
@@ -111,10 +114,12 @@ def _parse_form_input(
     custom_width_mm: str,
     custom_height_mm: str,
     scaling_mode: str,
+    positioning_mode: str,
     output_mode: str,
 ) -> tuple[ImpositionOptions, dict[str, Any], str | None]:
     normalized_paper_size = paper_size.strip()
     normalized_output_mode = output_mode.strip().lower()
+    normalized_positioning_mode = positioning_mode.strip()
     width_mm_value = custom_width_mm.strip()
     height_mm_value = custom_height_mm.strip()
 
@@ -126,6 +131,7 @@ def _parse_form_input(
         custom_width_points=None,
         custom_height_points=None,
         scaling_mode=scaling_mode,
+        positioning_mode=normalized_positioning_mode,
         output_mode="aggregated",
     )
     form_values: dict[str, Any] = {
@@ -136,6 +142,7 @@ def _parse_form_input(
         "custom_width_mm": width_mm_value,
         "custom_height_mm": height_mm_value,
         "scaling_mode": options.scaling_mode,
+        "positioning_mode": options.positioning_mode,
         "output_mode": normalized_output_mode,
     }
 
@@ -146,6 +153,10 @@ def _parse_form_input(
         return options, form_values, f"Invalid paper size. Choose one of: {valid_sizes}."
     if options.scaling_mode not in _SCALING_MODES:
         return options, form_values, "Invalid scaling mode. Choose proportional, stretch, or original."
+    try:
+        resolved_positioning_mode = resolve_positioning_mode(options.positioning_mode)
+    except ValueError:
+        return options, form_values, "Invalid positioning mode. Choose centered or binding_aligned."
     if normalized_output_mode not in _OUTPUT_MODES:
         valid_modes = ", ".join(_OUTPUT_MODES)
         return options, form_values, f"Invalid output mode. Choose one of: {valid_modes}."
@@ -158,6 +169,7 @@ def _parse_form_input(
         custom_width_points=options.custom_width_points,
         custom_height_points=options.custom_height_points,
         scaling_mode=options.scaling_mode,
+        positioning_mode=resolved_positioning_mode,
         output_mode=normalized_output_mode,
     )
 
@@ -179,6 +191,7 @@ def _parse_form_input(
             custom_width_points=width_mm * _POINTS_PER_MM,
             custom_height_points=height_mm * _POINTS_PER_MM,
             scaling_mode=options.scaling_mode,
+            positioning_mode=options.positioning_mode,
             output_mode=options.output_mode,
         )
 
@@ -256,6 +269,7 @@ def _impose_payload(
             duplex_rotate=options.duplex_rotate,
             custom_dimensions=custom_dimensions,
             scaling_mode=options.scaling_mode,
+            positioning_mode=options.positioning_mode,
         )
         generated_downloads: list[dict[str, Any]] = []
         total_output_pages = 0
@@ -269,6 +283,7 @@ def _impose_payload(
                 duplex_rotate=options.duplex_rotate,
                 custom_dimensions=custom_dimensions,
                 scaling_mode=options.scaling_mode,
+                positioning_mode=options.positioning_mode,
             )
             generated_downloads.append(
                 {
@@ -291,6 +306,7 @@ def _impose_payload(
                     duplex_rotate=options.duplex_rotate,
                     custom_dimensions=custom_dimensions,
                     scaling_mode=options.scaling_mode,
+                    positioning_mode=options.positioning_mode,
                 )
                 generated_downloads.append(
                     {
@@ -445,6 +461,7 @@ def create_app(
             "custom_width_mm": "",
             "custom_height_mm": "",
             "scaling_mode": "proportional",
+            "positioning_mode": "centered",
             "output_mode": "aggregated",
         }
         if form_values:
@@ -457,6 +474,7 @@ def create_app(
                 "result": result,
                 "paper_sizes": sorted(PAPER_SIZES.keys()) + [_CUSTOM_PAPER_SIZE],
                 "scaling_modes": list(_SCALING_MODES),
+                "positioning_modes": list(_POSITIONING_MODES),
                 "output_modes": _OUTPUT_MODES,
                 "form": defaults,
             },
@@ -483,6 +501,7 @@ def create_app(
         custom_width_mm: str = Form(""),
         custom_height_mm: str = Form(""),
         scaling_mode: str = Form("proportional"),
+        positioning_mode: str = Form("centered"),
         output_mode: str = Form("aggregated"),
     ) -> HTMLResponse:
         job_id = uuid4().hex
@@ -496,6 +515,7 @@ def create_app(
             flyleafs=flyleafs,
             duplex_rotate=duplex_rotate,
             output_mode=output_mode,
+            positioning_mode=positioning_mode,
             has_upload=file is not None and bool(file.filename),
         )
         normalized_action = action.strip().lower()
@@ -516,6 +536,7 @@ def create_app(
             custom_width_mm=custom_width_mm,
             custom_height_mm=custom_height_mm,
             scaling_mode=scaling_mode,
+            positioning_mode=positioning_mode,
             output_mode=output_mode,
         )
         if form_error is not None:

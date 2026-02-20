@@ -36,6 +36,13 @@
           {% endfor %}
         </select>
 
+        <label for="positioning_mode">Positioning mode</label>
+        <select id="positioning_mode" name="positioning_mode">
+          {% for mode in positioning_modes %}
+          <option value="{{ mode }}" {{ "selected" if form.positioning_mode == mode else "" }}>{{ mode }}</option>
+          {% endfor %}
+        </select>
+
         <label for="signature_length">Signature length (sheets)</label>
         <input id="signature_length" name="signature_length" type="number" min="1" value="{{ form.signature_length }}" required />
 
