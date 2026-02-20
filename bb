@@ -18,6 +18,8 @@ Orca commands:
   setup-worktrees [count]
                          Create persistent worktrees (default count: 2)
   with-lock ... -- cmd   Run a command under Orca's shared lock primitive
+  check-closed-deps-merged <issue-id> [target-ref]
+                         Verify closed blocking dependencies are merged to integration ref
 
 Examples:
   ./bb orca setup-worktrees 2
@@ -26,6 +28,7 @@ Examples:
   ./bb orca start 2 --reasoning-level high
   ./bb orca start --continuous
   ./bb orca status
+  ./bb orca check-closed-deps-merged bookbinder-8dd.7
   ./bb orca with-lock --scope merge --timeout 120 -- git push origin main
   ./bb orca stop
 USAGE

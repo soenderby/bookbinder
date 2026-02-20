@@ -128,6 +128,14 @@ bd list --status in_progress --limit 50
 bd list --status closed --sort closed --reverse --limit 20
 ```
 
+Dependency-merge guard for a candidate issue:
+
+```bash
+scripts/orca/check-closed-deps-merged.sh <issue-id>
+```
+
+If this guard fails, closed blocking dependencies are not yet represented on `main`; treat the issue as not executable in the current run.
+
 Attach to a session:
 
 ```bash

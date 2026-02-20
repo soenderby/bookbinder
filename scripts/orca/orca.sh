@@ -15,6 +15,7 @@ Commands:
   status
   setup-worktrees [count]
   with-lock [--scope NAME] [--timeout SECONDS] -- <command> [args...]
+  check-closed-deps-merged <issue-id> [target-ref]
 USAGE
 }
 
@@ -38,6 +39,9 @@ case "${subcommand}" in
     ;;
   with-lock|lock)
     exec "${SCRIPT_DIR}/with-lock.sh" "$@"
+    ;;
+  check-closed-deps-merged|deps-check)
+    exec "${SCRIPT_DIR}/check-closed-deps-merged.sh" "$@"
     ;;
   help|-h|--help|"")
     usage
