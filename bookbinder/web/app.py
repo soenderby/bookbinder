@@ -69,8 +69,11 @@ def _cleanup_stale_artifacts(
 
 
 def _validated_filename(filename: str) -> str:
+    if "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     safe_name = Path(filename).name
-    if safe_name != filename:
+    if safe_name != filename or safe_name in {"", ".", ".."}:
         raise HTTPException(status_code=400, detail="Invalid filename")
     return safe_name
 
