@@ -8,6 +8,7 @@ Usage:
 
 Options:
   --source-branch <branch>   Required source branch to merge (for example: swarm/agent-1)
+  --required-commit <sha>    Optional commit that must be present on remote source branch
   --remote <name>            Git remote name (default: origin)
   --target-branch <branch>   Integration target branch (default: main)
   --lock-timeout <seconds>   Wait time for global merge lock (default: 120)
@@ -16,6 +17,7 @@ USAGE
 }
 
 SOURCE_BRANCH=""
+REQUIRED_COMMIT=""
 REMOTE="${ORCA_MERGE_REMOTE:-origin}"
 TARGET_BRANCH="${ORCA_MERGE_TARGET_BRANCH:-main}"
 LOCK_TIMEOUT_SECONDS="${ORCA_MERGE_LOCK_TIMEOUT_SECONDS:-120}"
@@ -29,6 +31,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       SOURCE_BRANCH="$2"
+      shift 2
+      ;;
+    --required-commit)
+      if [[ $# -lt 2 ]]; then
+        echo "[merge] --required-commit requires an argument" >&2
+        exit 1
+      fi
+      REQUIRED_COMMIT="$2"
       shift 2
       ;;
     --remote)
@@ -91,6 +101,11 @@ if ! [[ "${MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
+if [[ -n "${REQUIRED_COMMIT}" ]] && ! git rev-parse --verify --quiet "${REQUIRED_COMMIT}^{commit}" >/dev/null; then
+  echo "[merge] required commit is not a valid commit object: ${REQUIRED_COMMIT}" >&2
+  exit 1
+fi
+
 ROOT="$(git rev-parse --show-toplevel)"
 LOCK_FILE="${ROOT}/.git/orca-merge.lock"
 WORKTREE_ROOT="${ROOT}/worktrees"
@@ -145,6 +160,11 @@ while [[ "${attempt}" -le "${MAX_ATTEMPTS}" ]]; do
 
   if ! git rev-parse --verify --quiet "${target_ref}" >/dev/null; then
     log "target ref does not exist on remote: ${target_ref}"
+    exit 1
+  fi
+
+  if [[ -n "${REQUIRED_COMMIT}" ]] && ! git merge-base --is-ancestor "${REQUIRED_COMMIT}" "${source_ref}" >/dev/null 2>&1; then
+    log "required commit is not present on ${source_ref}: ${REQUIRED_COMMIT}"
     exit 1
   fi
 

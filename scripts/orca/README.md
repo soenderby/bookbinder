@@ -54,6 +54,7 @@ Each iteration follows this flow:
 4. Claim work: attempt atomic claim via `bd update <id> --claim`; if claim race is lost, retry later.
 5. Run agent: render `AGENT_PROMPT.md` placeholders and run `AGENT_COMMAND`, logging to a per-run file.
 6. Post-agent handling: on success, re-check branch/cleanliness and run `merge-after-run.sh`; on failure, return issue to `open` with notes.
+   - merge step requires the agent run HEAD commit to be present on `origin/swarm/agent-N` before integration.
 7. Close issue after merge: close the bead only if merge succeeded (legacy prompt behavior where the issue is already closed is tolerated).
 8. Post-sync guardrail: re-run the same fail-fast sync path as step 2.
 9. Exit conditions: no ready issues, `MAX_RUNS` reached, or hard guard/sync/merge failure.

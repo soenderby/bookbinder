@@ -310,12 +310,15 @@ append_issue_note_with_retry() {
 
 merge_issue_or_return_to_open() {
   local issue_id="$1"
+  local source_commit
   local merge_failure_note
   local close_failure_note
 
-  log "starting merge for ${issue_id}: ${EXPECTED_BRANCH} -> ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH}"
+  source_commit="$(git rev-parse HEAD)"
+  log "starting merge for ${issue_id}: ${EXPECTED_BRANCH}@${source_commit} -> ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH}"
   if ! "${MERGE_SCRIPT}" \
     --source-branch "${EXPECTED_BRANCH}" \
+    --required-commit "${source_commit}" \
     --remote "${ORCA_MERGE_REMOTE}" \
     --target-branch "${ORCA_MERGE_TARGET_BRANCH}" \
     --lock-timeout "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" \
