@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from starlette.datastructures import UploadFile
 
@@ -18,6 +19,7 @@ from bookbinder.web.app import (
     _resolve_legacy_artifact_path,
     _resolve_request_artifact_path,
     _validate_upload_metadata,
+    create_app,
 )
 
 pytestmark = pytest.mark.mvp_integration
@@ -135,6 +137,9 @@ def test_download_rejects_path_traversal_filename(tmp_path: Path, filename: str)
 
 
 def test_download_request_artifact_missing_returns_404(tmp_path: Path) -> None:
+    request_dir = tmp_path / ("a" * 32)
+    request_dir.mkdir()
+
     with pytest.raises(HTTPException) as exc_info:
         _resolve_request_artifact_path(tmp_path, "a" * 32, "missing.pdf")
 
@@ -158,6 +163,31 @@ def test_legacy_download_path_resolution_and_errors(tmp_path: Path) -> None:
         _resolve_legacy_artifact_path(tmp_path, "../legacy.pdf")
     assert invalid_exc.value.status_code == 400
     assert invalid_exc.value.detail == "Invalid filename"
+
+
+def test_download_expired_request_artifact_returns_actionable_410(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    expired_response = client.get(f"/download/{'a' * 32}/missing.pdf")
+    assert expired_response.status_code == 410
+    assert expired_response.json() == {
+        "detail": "This download link has expired after cleanup. Regenerate the PDF to create a new link."
+    }
+
+
+def test_download_expired_request_artifact_renders_ui_guidance_for_html_clients(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get(
+        f"/download/{'a' * 32}/missing.pdf",
+        headers={"accept": "text/html"},
+    )
+
+    assert response.status_code == 410
+    assert "This download link has expired after cleanup." in response.text
+    assert "Regenerate the PDF to create a new link." in response.text
 
 
 def test_cleanup_removes_stale_generated_artifacts(tmp_path: Path) -> None:

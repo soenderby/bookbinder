@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pypdf import PdfReader
@@ -28,6 +28,7 @@ from bookbinder.imposition.pdf_writer import (
 )
 
 _REQUEST_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+_EXPIRED_ARTIFACT_MESSAGE = "This download link has expired after cleanup. Regenerate the PDF to create a new link."
 
 
 @dataclass(frozen=True)
@@ -165,7 +166,11 @@ def _resolve_request_artifact_path(artifact_dir: Path, request_id: str, filename
         raise HTTPException(status_code=400, detail="Invalid request id")
 
     safe_name = _validated_filename(filename)
-    file_path = artifact_dir / request_id / safe_name
+    request_artifact_dir = artifact_dir / request_id
+    if not request_artifact_dir.is_dir():
+        raise HTTPException(status_code=410, detail=_EXPIRED_ARTIFACT_MESSAGE)
+
+    file_path = request_artifact_dir / safe_name
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -301,8 +306,18 @@ def create_app(
         return render_index(request, result=result, form_values=form_values)
 
     @app.get("/download/{request_id}/{filename:path}")
-    def download_request_artifact(request_id: str, filename: str) -> FileResponse:
-        file_path = _resolve_request_artifact_path(app.state.artifact_dir, request_id, filename)
+    def download_request_artifact(request: Request, request_id: str, filename: str) -> Response:
+        try:
+            file_path = _resolve_request_artifact_path(app.state.artifact_dir, request_id, filename)
+        except HTTPException as exc:
+            if exc.status_code == 410 and "text/html" in request.headers.get("accept", ""):
+                return render_index(
+                    request,
+                    result={"status": "error", "message": _EXPIRED_ARTIFACT_MESSAGE},
+                    status_code=410,
+                )
+            raise
+
         return FileResponse(path=file_path, media_type="application/pdf", filename=file_path.name)
 
     @app.get("/download/{filename}")
