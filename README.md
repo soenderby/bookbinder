@@ -23,7 +23,7 @@ Packaging smoke coverage for editable installs with a top-level `generated/` dir
 
 ## MVP Notes
 
-- Supported paper sizes: `A4`, `Letter`
+- Supported paper sizes: `A3`, `A4`, `A5`, `Letter`, `Legal`, `Tabloid`, and `Custom` (width/height in mm)
 - Signature mode: standard fixed `sig_length` (in sheets)
 - Output: single aggregated duplex PDF
 - Generated artifacts are request-scoped under `generated/<request-id>/...`
