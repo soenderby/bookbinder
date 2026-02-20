@@ -2,14 +2,6 @@
 
 This directory contains the Orca multi-agent orchestration scripts.
 
-## Prerequisites
-
-- `git` (worktree support)
-- `tmux` (agent sessions)
-- `bd` CLI (task queue and updates)
-- `jq` (ready queue JSON parsing)
-- `codex` CLI (default `AGENT_COMMAND`)
-
 ## Entrypoints
 
 - Preferred: `./bb orca <command> [args]`
@@ -21,6 +13,15 @@ This directory contains the Orca multi-agent orchestration scripts.
 - `stop`
 - `status`
 - `setup-worktrees [count]`
+
+## TODO
+In no particular order:
+ - A/B testing prompts
+ - Agent loop metrics in sqlite database
+ - Figure out how to sync worktrees and merge agents work
+ - Agent loop handoff
+ - Sharing or storing lessons learned from run
+ - Streamline loop prompt (likely tied to A/B testing)
 
 ## Architecture Overview
 
@@ -156,12 +157,3 @@ This gives a full timeline for debugging queue behavior and git-state issues.
 - `SESSION_PREFIX`: tmux session prefix (default: `bb-agent`)
 - `PROMPT_TEMPLATE`: path to prompt template (default: `scripts/orca/AGENT_PROMPT.md`)
 - `AGENT_COMMAND`: full command used for each agent pass (default: `codex exec ...`)
-
-## TODO
-In no particular order:
- - A/B testing prompts
- - Agent loop metrics in sqlite database
- - Figure out how to sync worktrees
- - Agent loop handoff
- - Sharing or storing lessons learned from run
- - Streamline loop prompt (likely tied to A/B testing)
