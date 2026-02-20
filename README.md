@@ -28,4 +28,5 @@ Packaging smoke coverage for editable installs with a top-level `generated/` dir
 - Output: single aggregated duplex PDF
 - Generated artifacts are request-scoped under `generated/<request-id>/...`
 - Stale generated artifacts older than 24 hours are cleaned on each `/impose` request
+- Request/job logs are structured (`event_name`, `event_fields`) and include `job_id` for imposition failure diagnostics
 - Unsupported in MVP: encrypted input PDFs, non-folio layouts
