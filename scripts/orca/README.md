@@ -22,7 +22,17 @@ This directory contains the Orca multi-agent orchestration scripts.
 - `status`
 - `setup-worktrees [count]`
 
-## Files
+## Architecture Overview
+
+Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per agent:
+
+1. `setup-worktrees.sh` ensures `worktrees/agent-N` and branch `swarm/agent-N` exist.
+2. `start.sh` launches one tmux session per agent and injects runtime env.
+3. `agent-loop.sh` runs inside each session, polling `bd ready`, claiming one issue, running the agent command, then repeating.
+4. `status.sh` gives a multi-signal health snapshot (sessions, worktrees, queue, logs).
+5. `stop.sh` terminates active agent tmux sessions by prefix.
+
+## File Roles
 
 - `orca.sh`: command dispatcher
 - `setup-worktrees.sh`: creates and verifies persistent agent worktrees
@@ -32,12 +42,120 @@ This directory contains the Orca multi-agent orchestration scripts.
 - `stop.sh`: stops active agent sessions
 - `AGENT_PROMPT.md`: prompt template used by `agent-loop.sh`
 
-## Runtime knobs
+## Core Loop Logic (`agent-loop.sh`)
+
+Each iteration follows this flow:
+
+1. Pre-sync guardrail: verify expected branch and clean worktree (`git status --porcelain` empty).
+2. Sync: run `git pull --rebase --autostash` then `bd sync`; if either fails, stop the loop.
+3. Poll queue: call `bd ready --json` with bounded retries and backoff.
+4. Claim work: attempt atomic claim via `bd update <id> --claim`; if claim race is lost, retry later.
+5. Run agent: render `AGENT_PROMPT.md` placeholders and run `AGENT_COMMAND`, logging to a per-run file.
+6. Post-agent handling: on success, re-check branch/cleanliness; on failure, return issue to `open` with notes.
+7. Post-sync guardrail: re-run the same fail-fast sync path as step 2.
+8. Exit conditions: no ready issues, `MAX_RUNS` reached, or hard guard/sync failure.
+
+## Validation and Safety Checks
+
+### `start.sh`
+
+Checks before launching sessions:
+
+1. prerequisites must exist: `git`, `tmux`, `bd`, `jq`, plus the binary in `AGENT_COMMAND`
+2. `count` must be positive integer
+3. `MAX_RUNS` must be non-negative integer (`0` means unbounded)
+4. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+`
+5. `PROMPT_TEMPLATE` must exist
+
+Behavior details:
+
+1. default model is `gpt-5.3-codex`
+2. if `--reasoning-level` is set and `AGENT_COMMAND` was not explicitly overridden, append `-c model_reasoning_effort=<level>`
+3. if session already exists, it is left running (idempotent start)
+4. invokes `setup-worktrees.sh` before launching tmux sessions
+
+### `setup-worktrees.sh`
+
+Worktree/upstream behavior:
+
+1. ensures `worktrees/` directory exists
+2. for each `agent-N`, creates worktree/branch only if missing (idempotent)
+3. ensures branch upstream by first trying `git branch --set-upstream-to origin/<branch>`, then falling back to `git push -u origin <branch>` if needed
+4. if `origin` remote is missing, logs warning and skips upstream setup
+
+### `agent-loop.sh`
+
+Input/env validation before loop:
+
+1. `WORKTREE` is required and must be a valid git worktree
+2. `MAX_RUNS` must be non-negative integer
+3. `READY_MAX_ATTEMPTS` / `READY_RETRY_SECONDS` must be positive integers
+4. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+`
+5. expected branch is captured at startup and must remain stable
+
+Signal and interruption handling:
+
+1. traps `INT`, `TERM`, `EXIT`
+2. if an issue is currently claimed, tries to return it to `open` with retries and note
+3. avoids re-entrant cleanup with `cleanup_in_progress` guard
+
+### `status.sh`
+
+Observability behavior:
+
+1. prints session list scoped by `SESSION_PREFIX`
+2. prints `git worktree list`
+3. prints current in-progress issues, recently closed issues, and ready queue
+4. prints available log filenames under `agent-logs/`
+5. uses `safe_run` wrappers so partial command failures do not crash status output
+
+### `stop.sh`
+
+Shutdown behavior:
+
+1. finds tmux sessions by `SESSION_PREFIX`
+2. kills each matching session
+3. exits cleanly if none exist
+
+## Error Handling Model
+
+The scripts intentionally split failures into two categories:
+
+1. Hard-stop failures (loop exits): dirty worktree at guard checkpoints, unfixable branch drift, failed `git pull --rebase --autostash`, or failed `bd sync`.
+2. Recoverable/transient failures (loop continues): transient `bd ready --json` failure (bounded retries), claim race on `--claim`, or temporary failure returning issue to open (retries, then manual-intervention warning).
+
+Issue release retry policy:
+
+1. when agent run fails or loop is interrupted while holding a claim, Orca retries `bd update ... --status open` up to 3 times
+2. all retries append timestamped notes for auditability
+3. persistent failure is logged as manual-intervention-needed
+
+## Logs and Traceability
+
+Per-run logs are written to:
+
+`agent-logs/<agent-name>-<session-id>-run-<n>-<issue-id>-<timestamp>.log`
+
+Each run logs at least:
+
+1. session id and worktree
+2. claimed issue id
+3. agent command start/finish
+4. sync/guard failures
+5. claim-release failures/retries
+
+This gives a full timeline for debugging queue behavior and git-state issues.
+
+## Runtime Knobs
 
 - `MAX_RUNS`: number of issue runs per loop (`0` means unbounded until queue empty)
+- `AGENT_MODEL`: default `gpt-5.3-codex` for default codex command
 - `AGENT_REASONING_LEVEL`: value passed as `model_reasoning_effort` for default codex command
 - `READY_MAX_ATTEMPTS`: retries for `bd ready --json` polling (default: `5`)
 - `READY_RETRY_SECONDS`: seconds between ready polling retries (default: `3`)
+- `SESSION_PREFIX`: tmux session prefix (default: `bb-agent`)
+- `PROMPT_TEMPLATE`: path to prompt template (default: `scripts/orca/AGENT_PROMPT.md`)
+- `AGENT_COMMAND`: full command used for each agent pass (default: `codex exec ...`)
 
 ## TODO
 In no particular order:
