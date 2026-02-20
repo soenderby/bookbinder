@@ -12,12 +12,12 @@ Usage:
 Orca commands:
   start [count] [--runs N|--continuous] [--reasoning-level LEVEL]
                          Start tmux-backed agent loops (default count: 2,
-                         default mode: --continuous, and loops stop when
-                         no ready tasks remain)
+                         default mode: --continuous; agents can request stop)
   stop                   Stop running agent loop sessions
   status                 Show swarm/session/worktree status
   setup-worktrees [count]
                          Create persistent worktrees (default count: 2)
+  with-lock ... -- cmd   Run a command under Orca's shared lock primitive
 
 Examples:
   ./bb orca setup-worktrees 2
@@ -26,6 +26,7 @@ Examples:
   ./bb orca start 2 --reasoning-level high
   ./bb orca start --continuous
   ./bb orca status
+  ./bb orca with-lock --scope merge --timeout 120 -- git push origin main
   ./bb orca stop
 USAGE
 }

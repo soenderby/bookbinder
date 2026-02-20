@@ -17,11 +17,33 @@ ensure_upstream() {
   local worktree_path="$1"
   local branch_name="$2"
   local upstream_ref
+  local upstream_remote
+  local upstream_branch
+  local ls_remote_status
 
   upstream_ref="$(git -C "${worktree_path}" for-each-ref --format='%(upstream:short)' "refs/heads/${branch_name}")"
   if [[ -n "${upstream_ref}" ]]; then
-    echo "[setup] upstream exists for ${branch_name}: ${upstream_ref}"
-    return 0
+    upstream_remote="${upstream_ref%%/*}"
+    upstream_branch="${upstream_ref#*/}"
+    if git -C "${worktree_path}" ls-remote --exit-code --heads "${upstream_remote}" "${upstream_branch}" >/dev/null 2>&1; then
+      echo "[setup] upstream exists for ${branch_name}: ${upstream_ref}"
+      return 0
+    fi
+    ls_remote_status=$?
+
+    if [[ "${ls_remote_status}" -ne 2 ]]; then
+      echo "[setup] warning: could not verify upstream ref for ${branch_name}: ${upstream_ref}; proceeding without restore" >&2
+      return 0
+    fi
+
+    echo "[setup] upstream configured but remote ref missing for ${branch_name}: ${upstream_ref}; recreating"
+    if git -C "${worktree_path}" push -u "${upstream_remote}" "${branch_name}" >/dev/null 2>&1; then
+      echo "[setup] upstream restored for ${branch_name}: ${upstream_remote}/${branch_name}"
+      return 0
+    fi
+
+    echo "[setup] failed to restore missing upstream ref for ${branch_name}: ${upstream_ref}" >&2
+    return 1
   fi
 
   if [[ "${origin_available}" -eq 0 ]]; then

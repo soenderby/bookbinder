@@ -14,6 +14,7 @@ Commands:
   stop
   status
   setup-worktrees [count]
+  with-lock [--scope NAME] [--timeout SECONDS] -- <command> [args...]
 USAGE
 }
 
@@ -34,6 +35,9 @@ case "${subcommand}" in
     ;;
   setup-worktrees|setup)
     exec "${SCRIPT_DIR}/setup-worktrees.sh" "$@"
+    ;;
+  with-lock|lock)
+    exec "${SCRIPT_DIR}/with-lock.sh" "$@"
     ;;
   help|-h|--help|"")
     usage

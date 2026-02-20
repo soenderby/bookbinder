@@ -5,18 +5,18 @@ ROOT="$(git rev-parse --show-toplevel)"
 WORKTREE="${WORKTREE:-}"
 
 if [[ -z "${WORKTREE}" ]]; then
-  echo "WORKTREE is required"
+  echo "WORKTREE is required" >&2
   exit 1
 fi
 
 if ! git -C "${WORKTREE}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "WORKTREE does not look like a git worktree: ${WORKTREE}"
+  echo "WORKTREE does not look like a git worktree: ${WORKTREE}" >&2
   exit 1
 fi
 
 AGENT_NAME="${AGENT_NAME:-$(basename "${WORKTREE}")}"
 AGENT_SESSION_ID="${AGENT_SESSION_ID:-${AGENT_NAME}-$(date -u +%Y%m%dT%H%M%SZ)}"
-AGENT_MODEL="${AGENT_MODEL:-gpt-5}"
+AGENT_MODEL="${AGENT_MODEL:-gpt-5.3-codex}"
 AGENT_REASONING_LEVEL="${AGENT_REASONING_LEVEL:-}"
 if [[ -n "${AGENT_COMMAND:-}" ]]; then
   AGENT_COMMAND="${AGENT_COMMAND}"
@@ -28,118 +28,434 @@ else
 fi
 PROMPT_TEMPLATE="${PROMPT_TEMPLATE:-${ROOT}/scripts/orca/AGENT_PROMPT.md}"
 MAX_RUNS="${MAX_RUNS:-0}"
-READY_MAX_ATTEMPTS="${READY_MAX_ATTEMPTS:-5}"
-READY_RETRY_SECONDS="${READY_RETRY_SECONDS:-3}"
+RUN_SLEEP_SECONDS="${RUN_SLEEP_SECONDS:-2}"
+ORCA_TIMING_METRICS="${ORCA_TIMING_METRICS:-1}"
+ORCA_COMPACT_SUMMARY="${ORCA_COMPACT_SUMMARY:-1}"
 
 if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
-  echo "MAX_RUNS must be a non-negative integer (0 means unbounded mode): ${MAX_RUNS}"
+  echo "MAX_RUNS must be a non-negative integer (0 means unbounded mode): ${MAX_RUNS}" >&2
   exit 1
 fi
 
-if ! [[ "${READY_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "READY_MAX_ATTEMPTS must be a positive integer: ${READY_MAX_ATTEMPTS}"
+if ! [[ "${RUN_SLEEP_SECONDS}" =~ ^[0-9]+$ ]]; then
+  echo "RUN_SLEEP_SECONDS must be a non-negative integer: ${RUN_SLEEP_SECONDS}" >&2
   exit 1
 fi
 
-if ! [[ "${READY_RETRY_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "READY_RETRY_SECONDS must be a positive integer: ${READY_RETRY_SECONDS}"
+if ! [[ "${ORCA_TIMING_METRICS}" =~ ^[01]$ ]]; then
+  echo "ORCA_TIMING_METRICS must be 0 or 1: ${ORCA_TIMING_METRICS}" >&2
+  exit 1
+fi
+
+if ! [[ "${ORCA_COMPACT_SUMMARY}" =~ ^[01]$ ]]; then
+  echo "ORCA_COMPACT_SUMMARY must be 0 or 1: ${ORCA_COMPACT_SUMMARY}" >&2
   exit 1
 fi
 
 if [[ -n "${AGENT_REASONING_LEVEL}" && ! "${AGENT_REASONING_LEVEL}" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  echo "AGENT_REASONING_LEVEL must contain only letters, digits, dot, underscore, or dash: ${AGENT_REASONING_LEVEL}"
+  echo "AGENT_REASONING_LEVEL must contain only letters, digits, dot, underscore, or dash: ${AGENT_REASONING_LEVEL}" >&2
   exit 1
 fi
 
-runs_completed=0
-current_issue_id=""
-cleanup_in_progress=0
+if [[ ! -f "${PROMPT_TEMPLATE}" ]]; then
+  echo "PROMPT_TEMPLATE not found: ${PROMPT_TEMPLATE}" >&2
+  exit 1
+fi
 
 mkdir -p "${ROOT}/agent-logs"
+SESSION_LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}.log"
+METRICS_FILE="${ROOT}/agent-logs/metrics.jsonl"
+DISCOVERY_LOG_DIR="${ROOT}/agent-logs/discoveries"
+DISCOVERY_LOG_FILE="${DISCOVERY_LOG_DIR}/${AGENT_NAME}.md"
+: > "${SESSION_LOGFILE}"
+touch "${METRICS_FILE}"
+mkdir -p "${DISCOVERY_LOG_DIR}"
+touch "${DISCOVERY_LOG_FILE}"
+
+runs_completed=0
+cleanup_in_progress=0
+
 LOGFILE=""
+SUMMARY_FILE=""
+SUMMARY_JSON_FILE=""
+LAST_MESSAGE_FILE=""
+RUN_AGENT_COMMAND=""
+RUN_NUMBER=0
+RUN_TIMESTAMP=""
+RUN_BASE=""
+RUN_EXIT_CODE=0
+RUN_DURATION_SECONDS=0
+RUN_RESULT=""
+RUN_REASON=""
+RUN_SUMMARY_PARSE_STATUS="missing"
+RUN_SUMMARY_LOOP_ACTION="continue"
+RUN_SUMMARY_LOOP_ACTION_REASON=""
+RUN_SUMMARY_ISSUE_ID=""
+RUN_SUMMARY_RESULT=""
+RUN_SUMMARY_ISSUE_STATUS=""
+RUN_SUMMARY_MERGED=""
+RUN_SUMMARY_DISCOVERY_COUNT=""
+RUN_SUMMARY_DISCOVERY_IDS=""
+RUN_TOKENS_USED=""
+RUN_TOKENS_PARSE_STATUS="missing"
 
 log() {
   local line
   line="$(printf '[%s] [%s] %s\n' "$(date -Iseconds)" "${AGENT_NAME}" "$*")"
+  printf '%s\n' "${line}" >> "${SESSION_LOGFILE}"
   if [[ -n "${LOGFILE}" ]]; then
-    printf '%s\n' "${line}" | tee -a "${LOGFILE}"
+    printf '%s\n' "${line}" | tee -a "${LOGFILE}" >&2
   else
     printf '%s\n' "${line}" >&2
   fi
 }
 
-sanitize_for_filename() {
-  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+now_epoch() {
+  date +%s
 }
 
-start_run_logfile() {
-  local issue_id="$1"
-  local run_number run_timestamp safe_issue_id
+start_run_artifacts() {
+  RUN_NUMBER=$((runs_completed + 1))
+  RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  RUN_BASE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}-run-${RUN_NUMBER}-${RUN_TIMESTAMP}"
+  LOGFILE="${RUN_BASE}.log"
+  SUMMARY_FILE="${RUN_BASE}-summary.md"
+  SUMMARY_JSON_FILE="${RUN_BASE}-summary.json"
+  LAST_MESSAGE_FILE="${RUN_BASE}-last-message.md"
 
-  run_number=$((runs_completed + 1))
-  run_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  safe_issue_id="$(sanitize_for_filename "${issue_id}")"
-  LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}-run-${run_number}-${safe_issue_id}-${run_timestamp}.log"
   : > "${LOGFILE}"
 
-  log "starting run ${run_number} for ${issue_id}"
+  RUN_AGENT_COMMAND=""
+  RUN_EXIT_CODE=0
+  RUN_DURATION_SECONDS=0
+  RUN_RESULT=""
+  RUN_REASON=""
+  RUN_SUMMARY_PARSE_STATUS="missing"
+  RUN_SUMMARY_LOOP_ACTION="continue"
+  RUN_SUMMARY_LOOP_ACTION_REASON=""
+  RUN_SUMMARY_ISSUE_ID=""
+  RUN_SUMMARY_RESULT=""
+  RUN_SUMMARY_ISSUE_STATUS=""
+  RUN_SUMMARY_MERGED=""
+  RUN_SUMMARY_DISCOVERY_COUNT=""
+  RUN_SUMMARY_DISCOVERY_IDS=""
+  RUN_TOKENS_USED=""
+  RUN_TOKENS_PARSE_STATUS="missing"
+
+  log "starting run ${RUN_NUMBER}"
   log "session id: ${AGENT_SESSION_ID}"
   log "worktree: ${WORKTREE}"
+  log "run log: ${LOGFILE}"
+  log "summary json path: ${SUMMARY_JSON_FILE}"
+  log "discovery log path: ${DISCOVERY_LOG_FILE}"
 }
 
-release_claim_if_needed() {
-  local reason="$1"
-  if [[ -z "${current_issue_id}" ]]; then
+build_agent_command_for_run() {
+  RUN_AGENT_COMMAND="${AGENT_COMMAND}"
+
+  if [[ "${ORCA_COMPACT_SUMMARY}" -ne 1 ]]; then
     return
   fi
 
-  local failure_note
-  failure_note="Agent loop interruption in ${AGENT_NAME} at $(date -Iseconds). Reason: ${reason}. Returning issue to open for retry."
-  if bd update "${current_issue_id}" --status open --assignee "" --append-notes "${failure_note}" >/dev/null 2>&1; then
-    log "returned ${current_issue_id} to open (${reason})"
-  else
-    log "failed to return ${current_issue_id} to open (${reason}); manual intervention needed"
+  if [[ "${RUN_AGENT_COMMAND}" != *"codex exec"* ]]; then
+    return
   fi
 
-  current_issue_id=""
+  if [[ "${RUN_AGENT_COMMAND}" == *"--output-last-message"* ]]; then
+    return
+  fi
+
+  RUN_AGENT_COMMAND="${RUN_AGENT_COMMAND} --output-last-message $(printf '%q' "${LAST_MESSAGE_FILE}")"
+}
+
+write_prompt_file() {
+  local prompt_file="$1"
+  local prompt_text
+
+  prompt_text="$(cat "${PROMPT_TEMPLATE}")"
+  prompt_text="${prompt_text//__AGENT_NAME__/${AGENT_NAME}}"
+  prompt_text="${prompt_text//__ISSUE_ID__/agent-selected}"
+  prompt_text="${prompt_text//__WORKTREE__/${WORKTREE}}"
+  prompt_text="${prompt_text//__RUN_SUMMARY_PATH__/${SUMMARY_JSON_FILE}}"
+  prompt_text="${prompt_text//__RUN_SUMMARY_JSON__/${SUMMARY_JSON_FILE}}"
+  prompt_text="${prompt_text//__SUMMARY_JSON_PATH__/${SUMMARY_JSON_FILE}}"
+  prompt_text="${prompt_text//__DISCOVERY_LOG_PATH__/${DISCOVERY_LOG_FILE}}"
+  prompt_text="${prompt_text//__AGENT_DISCOVERY_LOG_PATH__/${DISCOVERY_LOG_FILE}}"
+
+  printf '%s\n' "${prompt_text}" > "${prompt_file}"
+}
+
+extract_tokens_used_from_run_log() {
+  local raw
+
+  RUN_TOKENS_USED=""
+  RUN_TOKENS_PARSE_STATUS="missing"
+
+  if [[ ! -f "${LOGFILE}" ]]; then
+    return
+  fi
+
+  raw="$(awk '/^tokens used$/ {getline; print; exit}' "${LOGFILE}" | tr -d '\r')"
+  if [[ -z "${raw}" ]]; then
+    return
+  fi
+
+  raw="$(printf '%s' "${raw}" | tr -d ' ,')"
+  if [[ "${raw}" =~ ^[0-9]+$ ]]; then
+    RUN_TOKENS_USED="${raw}"
+    RUN_TOKENS_PARSE_STATUS="ok"
+    return
+  fi
+
+  RUN_TOKENS_PARSE_STATUS="parse_error"
+}
+
+parse_summary_json_if_present() {
+  RUN_SUMMARY_PARSE_STATUS="missing"
+  RUN_SUMMARY_LOOP_ACTION="continue"
+  RUN_SUMMARY_LOOP_ACTION_REASON=""
+  RUN_SUMMARY_ISSUE_ID=""
+  RUN_SUMMARY_RESULT=""
+  RUN_SUMMARY_ISSUE_STATUS=""
+  RUN_SUMMARY_MERGED=""
+  RUN_SUMMARY_DISCOVERY_COUNT=""
+  RUN_SUMMARY_DISCOVERY_IDS=""
+
+  if [[ ! -s "${SUMMARY_JSON_FILE}" ]]; then
+    return
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    RUN_SUMMARY_PARSE_STATUS="jq_unavailable"
+    log "summary present but jq unavailable: ${SUMMARY_JSON_FILE}"
+    return
+  fi
+
+  if ! jq -e . "${SUMMARY_JSON_FILE}" >/dev/null 2>&1; then
+    RUN_SUMMARY_PARSE_STATUS="invalid_json"
+    log "summary present but invalid json: ${SUMMARY_JSON_FILE}"
+    return
+  fi
+
+  RUN_SUMMARY_PARSE_STATUS="parsed"
+  RUN_SUMMARY_LOOP_ACTION="$(jq -r '
+    if (.loop_action | type == "string") and ((.loop_action == "continue") or (.loop_action == "stop"))
+    then .loop_action
+    else "continue"
+    end
+  ' "${SUMMARY_JSON_FILE}")"
+  RUN_SUMMARY_LOOP_ACTION_REASON="$(jq -r '(.loop_action_reason // "") | tostring' "${SUMMARY_JSON_FILE}")"
+  RUN_SUMMARY_ISSUE_ID="$(jq -r '(.issue_id // "") | tostring' "${SUMMARY_JSON_FILE}")"
+  RUN_SUMMARY_RESULT="$(jq -r '(.result // "") | tostring' "${SUMMARY_JSON_FILE}")"
+  RUN_SUMMARY_ISSUE_STATUS="$(jq -r '(.issue_status // "") | tostring' "${SUMMARY_JSON_FILE}")"
+  RUN_SUMMARY_MERGED="$(jq -r 'if has("merged") then (.merged | tostring) else "" end' "${SUMMARY_JSON_FILE}")"
+  RUN_SUMMARY_DISCOVERY_COUNT="$(jq -r 'if has("discovery_count") then (.discovery_count | tostring) else "" end' "${SUMMARY_JSON_FILE}")"
+  RUN_SUMMARY_DISCOVERY_IDS="$(jq -r '
+    if (.discovery_ids | type) == "array" then
+      (.discovery_ids | map(tostring) | join(","))
+    else
+      ""
+    end
+  ' "${SUMMARY_JSON_FILE}")"
+
+  log "parsed summary json: ${SUMMARY_JSON_FILE}"
+}
+
+determine_run_result() {
+  if [[ -n "${RUN_SUMMARY_RESULT}" ]]; then
+    RUN_RESULT="${RUN_SUMMARY_RESULT}"
+  elif [[ "${RUN_EXIT_CODE}" -eq 0 ]]; then
+    RUN_RESULT="success"
+  else
+    RUN_RESULT="failed"
+  fi
+
+  RUN_REASON="agent-exit-${RUN_EXIT_CODE}"
+  if [[ "${RUN_SUMMARY_PARSE_STATUS}" == "invalid_json" ]]; then
+    RUN_REASON="summary-invalid-json"
+  fi
+
+  if [[ "${RUN_SUMMARY_PARSE_STATUS}" == "parsed" && "${RUN_SUMMARY_LOOP_ACTION}" == "stop" ]]; then
+    if [[ -n "${RUN_SUMMARY_LOOP_ACTION_REASON}" ]]; then
+      RUN_REASON="${RUN_SUMMARY_LOOP_ACTION_REASON}"
+    else
+      RUN_REASON="agent-requested-stop"
+    fi
+  fi
+}
+
+write_run_summary_markdown() {
+  local final_message_note="(not captured)"
+
+  if [[ -f "${LAST_MESSAGE_FILE}" ]]; then
+    final_message_note="${LAST_MESSAGE_FILE}"
+  fi
+
+  {
+    echo "# Orca Run Summary"
+    echo
+    echo "- Timestamp: $(date -Iseconds)"
+    echo "- Agent: ${AGENT_NAME}"
+    echo "- Session: ${AGENT_SESSION_ID}"
+    echo "- Run: ${RUN_NUMBER}"
+    echo "- Exit Code: ${RUN_EXIT_CODE}"
+    echo "- Duration Seconds: ${RUN_DURATION_SECONDS}"
+    echo "- Result: ${RUN_RESULT}"
+    echo "- Reason: ${RUN_REASON}"
+    echo "- Summary JSON: ${SUMMARY_JSON_FILE}"
+    echo "- Summary Parse Status: ${RUN_SUMMARY_PARSE_STATUS}"
+    echo "- Loop Action: ${RUN_SUMMARY_LOOP_ACTION}"
+    if [[ -n "${RUN_SUMMARY_LOOP_ACTION_REASON}" ]]; then
+      echo "- Loop Action Reason: ${RUN_SUMMARY_LOOP_ACTION_REASON}"
+    fi
+    if [[ -n "${RUN_SUMMARY_ISSUE_ID}" ]]; then
+      echo "- Issue: ${RUN_SUMMARY_ISSUE_ID}"
+    fi
+    if [[ -n "${RUN_SUMMARY_RESULT}" ]]; then
+      echo "- Summary Result: ${RUN_SUMMARY_RESULT}"
+    fi
+    if [[ -n "${RUN_SUMMARY_ISSUE_STATUS}" ]]; then
+      echo "- Summary Issue Status: ${RUN_SUMMARY_ISSUE_STATUS}"
+    fi
+    if [[ -n "${RUN_SUMMARY_MERGED}" ]]; then
+      echo "- Summary Merged: ${RUN_SUMMARY_MERGED}"
+    fi
+    if [[ -n "${RUN_SUMMARY_DISCOVERY_COUNT}" ]]; then
+      echo "- Summary Discovery Count: ${RUN_SUMMARY_DISCOVERY_COUNT}"
+    fi
+    if [[ -n "${RUN_SUMMARY_DISCOVERY_IDS}" ]]; then
+      echo "- Summary Discovery IDs: ${RUN_SUMMARY_DISCOVERY_IDS}"
+    fi
+    echo "- Tokens Used: ${RUN_TOKENS_USED:-n/a} (${RUN_TOKENS_PARSE_STATUS})"
+    echo
+    echo "## Artifacts"
+    echo "- Run Log: ${LOGFILE}"
+    echo "- Agent Final Message: ${final_message_note}"
+  } > "${SUMMARY_FILE}"
+
+  if [[ -f "${LAST_MESSAGE_FILE}" ]]; then
+    {
+      echo
+      echo "## Agent Final Message (first 120 lines)"
+      echo
+      sed -n '1,120p' "${LAST_MESSAGE_FILE}"
+    } >> "${SUMMARY_FILE}"
+  fi
+
+  log "wrote run summary: ${SUMMARY_FILE}"
+}
+
+append_metrics_jsonl() {
+  local tokens_json
+
+  if [[ -n "${RUN_TOKENS_USED}" ]]; then
+    tokens_json="${RUN_TOKENS_USED}"
+  else
+    tokens_json="null"
+  fi
+
+  jq -nc \
+    --arg ts "$(date -Iseconds)" \
+    --arg agent "${AGENT_NAME}" \
+    --arg session "${AGENT_SESSION_ID}" \
+    --arg result "${RUN_RESULT}" \
+    --arg reason "${RUN_REASON}" \
+    --arg issue "${RUN_SUMMARY_ISSUE_ID}" \
+    --arg loop_action "${RUN_SUMMARY_LOOP_ACTION}" \
+    --arg loop_action_reason "${RUN_SUMMARY_LOOP_ACTION_REASON}" \
+    --arg summary_result "${RUN_SUMMARY_RESULT}" \
+    --arg summary_issue_status "${RUN_SUMMARY_ISSUE_STATUS}" \
+    --arg summary_merged "${RUN_SUMMARY_MERGED}" \
+    --arg summary_discovery_count "${RUN_SUMMARY_DISCOVERY_COUNT}" \
+    --arg summary_discovery_ids_csv "${RUN_SUMMARY_DISCOVERY_IDS}" \
+    --arg summary_parse_status "${RUN_SUMMARY_PARSE_STATUS}" \
+    --arg tokens_parse_status "${RUN_TOKENS_PARSE_STATUS}" \
+    --arg run_log "${LOGFILE}" \
+    --arg summary_json "${SUMMARY_JSON_FILE}" \
+    --arg summary_markdown "${SUMMARY_FILE}" \
+    --arg last_message "${LAST_MESSAGE_FILE}" \
+    --arg discovery_log "${DISCOVERY_LOG_FILE}" \
+    --argjson run_number "${RUN_NUMBER}" \
+    --argjson exit_code "${RUN_EXIT_CODE}" \
+    --argjson duration_seconds "${RUN_DURATION_SECONDS}" \
+    --argjson tokens_used "${tokens_json}" \
+    '{
+      timestamp: $ts,
+      agent_name: $agent,
+      session_id: $session,
+      run_number: $run_number,
+      exit_code: $exit_code,
+      result: $result,
+      reason: $reason,
+      issue_id: (if ($issue | length) > 0 then $issue else null end),
+      durations_seconds: {
+        iteration_total: $duration_seconds
+      },
+      tokens_used: $tokens_used,
+      tokens_parse_status: $tokens_parse_status,
+      summary_parse_status: $summary_parse_status,
+      summary: {
+        result: (if ($summary_result | length) > 0 then $summary_result else null end),
+        issue_status: (if ($summary_issue_status | length) > 0 then $summary_issue_status else null end),
+        merged: (
+          if ($summary_merged | length) == 0 then null
+          elif $summary_merged == "true" then true
+          elif $summary_merged == "false" then false
+          else $summary_merged
+          end
+        ),
+        discovery_count: (
+          if ($summary_discovery_count | length) == 0 then null
+          else (try ($summary_discovery_count | tonumber) catch $summary_discovery_count)
+          end
+        ),
+        discovery_ids: (
+          if ($summary_discovery_ids_csv | length) == 0 then []
+          else ($summary_discovery_ids_csv | split(","))
+          end
+        ),
+        loop_action: $loop_action,
+        loop_action_reason: (if ($loop_action_reason | length) > 0 then $loop_action_reason else null end)
+      },
+      files: {
+        run_log: $run_log,
+        summary_json: $summary_json,
+        summary_markdown: $summary_markdown,
+        agent_last_message: $last_message,
+        discovery_log: $discovery_log
+      }
+    }' >> "${METRICS_FILE}"
+}
+
+finalize_run_observability() {
+  extract_tokens_used_from_run_log
+
+  if [[ "${ORCA_TIMING_METRICS}" -eq 1 ]]; then
+    if append_metrics_jsonl; then
+      log "appended metrics row"
+    else
+      log "failed to append metrics row"
+    fi
+  fi
+
+  if [[ "${ORCA_COMPACT_SUMMARY}" -eq 1 ]]; then
+    write_run_summary_markdown
+  fi
 }
 
 cleanup_on_signal() {
   local signal="$1"
+
   if [[ "${cleanup_in_progress}" -eq 1 ]]; then
     return
   fi
 
   cleanup_in_progress=1
-  release_claim_if_needed "signal:${signal}"
+  log "received ${signal}; shutting down"
 }
 
 cleanup_on_exit() {
   cleanup_on_signal "exit"
-}
-
-next_ready_issue_with_retry() {
-  local attempts=1
-  local ready_json
-  local issue_id
-
-  while [[ "${attempts}" -le "${READY_MAX_ATTEMPTS}" ]]; do
-    if ready_json="$(bd ready --json 2>/dev/null)" && issue_id="$(jq -r '.[0].id // empty' <<<"${ready_json}" 2>/dev/null)"; then
-      printf '%s\n' "${issue_id}"
-      return 0
-    fi
-
-    log "failed to poll ready beads (attempt ${attempts}/${READY_MAX_ATTEMPTS}); retrying in ${READY_RETRY_SECONDS}s"
-    sleep "${READY_RETRY_SECONDS}"
-    attempts=$((attempts + 1))
-  done
-
-  return 1
-}
-
-sync_with_remote() {
-  git pull --rebase --autostash >/dev/null 2>&1 || true
-  bd sync >/dev/null 2>&1 || true
 }
 
 trap cleanup_on_exit EXIT
@@ -147,69 +463,54 @@ trap 'cleanup_on_signal INT; exit 130' INT
 trap 'cleanup_on_signal TERM; exit 143' TERM
 
 cd "${WORKTREE}"
+
 log "starting loop in ${WORKTREE}"
 log "session id: ${AGENT_SESSION_ID}"
+log "agent discovery log: ${DISCOVERY_LOG_FILE}"
 if [[ "${MAX_RUNS}" -eq 0 ]]; then
-  log "run mode: continuous until queue is empty"
+  log "run mode: unbounded"
 else
   log "run mode: stop after ${MAX_RUNS} runs"
 fi
 
 while true; do
+  local_stop_requested=0
+
   if [[ "${MAX_RUNS}" -gt 0 && "${runs_completed}" -ge "${MAX_RUNS}" ]]; then
     log "max runs reached (${runs_completed}/${MAX_RUNS}); exiting loop"
     break
   fi
 
-  sync_with_remote
+  start_run_artifacts
 
-  if ! issue_id="$(next_ready_issue_with_retry)"; then
-    log "ready queue polling failed after ${READY_MAX_ATTEMPTS} attempts; continuing loop after backoff"
-    sleep "${READY_RETRY_SECONDS}"
-    continue
-  fi
+  prompt_file="$(mktemp)"
+  write_prompt_file "${prompt_file}"
 
-  if [[ -z "${issue_id}" ]]; then
-    log "no ready beads; exiting loop"
-    break
-  fi
+  build_agent_command_for_run
+  log "running agent command"
 
-  if ! bd update "${issue_id}" --claim >/dev/null 2>&1; then
-    log "could not claim ${issue_id}; likely claimed by another agent"
-    sleep 3
-    continue
-  fi
-
-  log "claimed ${issue_id}"
-  current_issue_id="${issue_id}"
-  start_run_logfile "${issue_id}"
-
-  prompt_text="$(cat "${PROMPT_TEMPLATE}")"
-  prompt_text="${prompt_text//__AGENT_NAME__/${AGENT_NAME}}"
-  prompt_text="${prompt_text//__ISSUE_ID__/${issue_id}}"
-  prompt_text="${prompt_text//__WORKTREE__/${WORKTREE}}"
-
-  tmp_prompt="$(mktemp)"
-  printf '%s\n' "${prompt_text}" > "${tmp_prompt}"
-
-  log "running agent command for ${issue_id}"
-  if bash -lc "${AGENT_COMMAND}" < "${tmp_prompt}" >>"${LOGFILE}" 2>&1; then
-    log "agent command finished for ${issue_id}"
-    current_issue_id=""
+  run_started_epoch="$(now_epoch)"
+  if ORCA_RUN_SUMMARY_PATH="${SUMMARY_JSON_FILE}" \
+    ORCA_RUN_LOG_PATH="${LOGFILE}" \
+    ORCA_RUN_NUMBER="${RUN_NUMBER}" \
+    ORCA_SESSION_ID="${AGENT_SESSION_ID}" \
+    ORCA_AGENT_NAME="${AGENT_NAME}" \
+    ORCA_DISCOVERY_LOG_PATH="${DISCOVERY_LOG_FILE}" \
+    ORCA_AGENT_DISCOVERY_LOG_PATH="${DISCOVERY_LOG_FILE}" \
+    bash -lc "${RUN_AGENT_COMMAND}" < "${prompt_file}" >> "${LOGFILE}" 2>&1; then
+    RUN_EXIT_CODE=0
   else
-    log "agent command failed for ${issue_id}; returning issue to open"
-    failure_note="Agent loop failure in ${AGENT_NAME} at $(date -Iseconds). Command: ${AGENT_COMMAND}. Returning issue to open for retry."
-    if bd update "${issue_id}" --status open --assignee "" --append-notes "${failure_note}" >/dev/null 2>&1; then
-      log "returned ${issue_id} to open"
-    else
-      log "failed to return ${issue_id} to open; manual intervention needed"
-    fi
-    current_issue_id=""
+    RUN_EXIT_CODE=$?
   fi
+  RUN_DURATION_SECONDS=$(( $(now_epoch) - run_started_epoch ))
 
-  rm -f "${tmp_prompt}"
+  rm -f "${prompt_file}"
 
-  sync_with_remote
+  log "agent command exited with ${RUN_EXIT_CODE} after ${RUN_DURATION_SECONDS}s"
+
+  parse_summary_json_if_present
+  determine_run_result
+  finalize_run_observability
 
   runs_completed=$((runs_completed + 1))
   if [[ "${MAX_RUNS}" -eq 0 ]]; then
@@ -218,8 +519,24 @@ while true; do
     log "completed run ${runs_completed}/${MAX_RUNS}"
   fi
 
+  if [[ "${RUN_SUMMARY_PARSE_STATUS}" == "parsed" && "${RUN_SUMMARY_LOOP_ACTION}" == "stop" ]]; then
+    local_stop_requested=1
+    if [[ -n "${RUN_SUMMARY_LOOP_ACTION_REASON}" ]]; then
+      log "agent requested stop: ${RUN_SUMMARY_LOOP_ACTION_REASON}"
+    else
+      log "agent requested stop"
+    fi
+  fi
+
   LOGFILE=""
-  sleep 2
+
+  if [[ "${local_stop_requested}" -eq 1 ]]; then
+    break
+  fi
+
+  if [[ "${RUN_SLEEP_SECONDS}" -gt 0 ]]; then
+    sleep "${RUN_SLEEP_SECONDS}"
+  fi
 done
 
-log "loop stopped"
+log "loop stopped after ${runs_completed} run(s)"

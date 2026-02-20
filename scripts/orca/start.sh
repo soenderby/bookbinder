@@ -9,7 +9,7 @@ Usage:
 Options:
   count         Number of worker sessions/worktrees to launch (default: 2)
   --runs N      Stop each agent loop after N completed issue runs
-  --continuous  Keep each loop unbounded while ready work exists (default)
+  --continuous  Keep each loop unbounded (agent can request stop) (default)
   --reasoning-level LEVEL
                 Set `model_reasoning_effort` for default codex agent command
 USAGE
@@ -26,13 +26,18 @@ if [[ -n "${AGENT_COMMAND+x}" ]]; then
 fi
 AGENT_COMMAND="${AGENT_COMMAND:-codex exec --dangerously-bypass-approvals-and-sandbox --model ${AGENT_MODEL}}"
 MAX_RUNS="${MAX_RUNS:-0}"
+RUN_SLEEP_SECONDS="${RUN_SLEEP_SECONDS:-2}"
+ORCA_TIMING_METRICS="${ORCA_TIMING_METRICS:-1}"
+ORCA_COMPACT_SUMMARY="${ORCA_COMPACT_SUMMARY:-1}"
+ORCA_LOCK_SCOPE="${ORCA_LOCK_SCOPE:-merge}"
+ORCA_LOCK_TIMEOUT_SECONDS="${ORCA_LOCK_TIMEOUT_SECONDS:-120}"
 
 check_prerequisites() {
   local missing=()
   local cmd
   local agent_command_bin
 
-  for cmd in git tmux bd jq; do
+  for cmd in git tmux bd jq flock; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
       missing+=("${cmd}")
     fi
@@ -105,6 +110,31 @@ if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+if ! [[ "${RUN_SLEEP_SECONDS}" =~ ^[0-9]+$ ]]; then
+  echo "[start] RUN_SLEEP_SECONDS must be a non-negative integer: ${RUN_SLEEP_SECONDS}" >&2
+  exit 1
+fi
+
+if ! [[ "${ORCA_TIMING_METRICS}" =~ ^[01]$ ]]; then
+  echo "[start] ORCA_TIMING_METRICS must be 0 or 1: ${ORCA_TIMING_METRICS}" >&2
+  exit 1
+fi
+
+if ! [[ "${ORCA_COMPACT_SUMMARY}" =~ ^[01]$ ]]; then
+  echo "[start] ORCA_COMPACT_SUMMARY must be 0 or 1: ${ORCA_COMPACT_SUMMARY}" >&2
+  exit 1
+fi
+
+if ! [[ "${ORCA_LOCK_SCOPE}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "[start] ORCA_LOCK_SCOPE must contain only letters, digits, dot, underscore, or dash: ${ORCA_LOCK_SCOPE}" >&2
+  exit 1
+fi
+
+if ! [[ "${ORCA_LOCK_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[start] ORCA_LOCK_TIMEOUT_SECONDS must be a positive integer: ${ORCA_LOCK_TIMEOUT_SECONDS}" >&2
+  exit 1
+fi
+
 if [[ -n "${AGENT_REASONING_LEVEL}" && ! "${AGENT_REASONING_LEVEL}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "[start] reasoning level must contain only letters, digits, dot, underscore, or dash: ${AGENT_REASONING_LEVEL}" >&2
   exit 1
@@ -124,7 +154,7 @@ if [[ ! -f "${PROMPT_TEMPLATE}" ]]; then
 fi
 
 if [[ "${MAX_RUNS}" -eq 0 ]]; then
-  mode_message="continuous until queue is empty"
+  mode_message="continuous (agent-controlled stop)"
 else
   mode_message="${MAX_RUNS} runs per agent"
 fi
@@ -144,7 +174,7 @@ for i in $(seq 1 "${COUNT}"); do
   fi
 
   echo "[start] launching ${session} in ${worktree}"
-  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_REASONING_LEVEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q %q" \
+  tmux_cmd="$(printf "cd %q && AGENT_NAME=%q AGENT_SESSION_ID=%q WORKTREE=%q AGENT_MODEL=%q AGENT_REASONING_LEVEL=%q AGENT_COMMAND=%q PROMPT_TEMPLATE=%q MAX_RUNS=%q RUN_SLEEP_SECONDS=%q ORCA_TIMING_METRICS=%q ORCA_COMPACT_SUMMARY=%q ORCA_LOCK_SCOPE=%q ORCA_LOCK_TIMEOUT_SECONDS=%q %q" \
     "${ROOT}" \
     "agent-${i}" \
     "${session_id}" \
@@ -154,8 +184,25 @@ for i in $(seq 1 "${COUNT}"); do
     "${AGENT_COMMAND}" \
     "${PROMPT_TEMPLATE}" \
     "${MAX_RUNS}" \
+    "${RUN_SLEEP_SECONDS}" \
+    "${ORCA_TIMING_METRICS}" \
+    "${ORCA_COMPACT_SUMMARY}" \
+    "${ORCA_LOCK_SCOPE}" \
+    "${ORCA_LOCK_TIMEOUT_SECONDS}" \
     "${SCRIPT_DIR}/agent-loop.sh")"
   tmux new-session -d -s "${session}" "${tmux_cmd}"
+
+  sleep 1
+  if ! tmux has-session -t "${session}" 2>/dev/null; then
+    session_log="${ROOT}/agent-logs/agent-${i}-${session_id}.log"
+    echo "[start] warning: ${session} exited during startup" >&2
+    if [[ -f "${session_log}" ]]; then
+      echo "[start] recent startup log (${session_log}):" >&2
+      tail -n 20 "${session_log}" >&2 || true
+    else
+      echo "[start] no session log found yet; inspect agent-logs/" >&2
+    fi
+  fi
 done
 
 echo "[start] running sessions:"
