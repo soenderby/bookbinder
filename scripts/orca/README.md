@@ -54,7 +54,7 @@ Each iteration follows this flow:
 3. Poll queue: call `bd ready --json` with bounded retries and backoff.
 4. Claim work: attempt atomic claim via `bd update <id> --claim`; if claim race is lost, retry later.
 5. Run agent: render `AGENT_PROMPT.md` placeholders and run `AGENT_COMMAND`, logging to a per-run file.
-6. Post-agent handling: on success, re-check branch/cleanliness and run `merge-after-run.sh`; on failure, return issue to `open` with notes.
+6. Post-agent handling: on success, re-check branch/cleanliness, apply minimal-closeout policy checks, and run `merge-after-run.sh`; on failure, return issue to `open` with notes.
    - merge step requires the agent run HEAD commit to be present on `origin/swarm/agent-N` before integration.
 7. Close issue after merge: close the bead only if merge succeeded (legacy prompt behavior where the issue is already closed is tolerated).
 8. Post-sync guardrail: re-run the same fail-fast sync path as step 2.
@@ -96,10 +96,12 @@ Input/env validation before loop:
 2. `MAX_RUNS` must be non-negative integer
 3. `READY_MAX_ATTEMPTS` / `READY_RETRY_SECONDS` must be positive integers
 4. `SYNC_MAX_ATTEMPTS` / `SYNC_RETRY_SECONDS` must be positive integers
-5. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+`
-6. `MERGE_SCRIPT` must exist and be executable
-7. `ORCA_MERGE_LOCK_TIMEOUT_SECONDS` / `ORCA_MERGE_MAX_ATTEMPTS` must be positive integers
-8. expected branch is captured at startup and must remain stable
+5. `ORCA_MINIMAL_LANDING` / `ORCA_ENFORCE_MINIMAL_LANDING` must be `0|1`
+6. `ORCA_TIMING_METRICS` / `ORCA_COMPACT_SUMMARY` must be `0|1`
+7. `AGENT_REASONING_LEVEL` must match `[A-Za-z0-9._-]+`
+8. `MERGE_SCRIPT` must exist and be executable
+9. `ORCA_MERGE_LOCK_TIMEOUT_SECONDS` / `ORCA_MERGE_MAX_ATTEMPTS` must be positive integers
+10. expected branch is captured at startup and must remain stable
 
 Signal and interruption handling:
 
@@ -115,7 +117,9 @@ Observability behavior:
 2. prints `git worktree list`
 3. prints current in-progress issues, recently closed issues, and ready queue
 4. prints available log filenames under `agent-logs/`
-5. uses `safe_run` wrappers so partial command failures do not crash status output
+5. prints recent summary files (`*-summary.md`)
+6. prints latest metrics rows (`agent-logs/metrics.jsonl`)
+7. uses `safe_run` wrappers so partial command failures do not crash status output
 
 ### `stop.sh`
 
@@ -130,7 +134,12 @@ Shutdown behavior:
 The scripts intentionally split failures into two categories:
 
 1. Hard-stop failures (loop exits): dirty worktree at guard checkpoints, unfixable branch drift, merge conflict/failure, or close-after-merge failure.
-2. Recoverable/transient failures (loop continues): transient `bd ready --json` failure (bounded retries), sync failures (`git pull`/`bd sync`) after bounded retries, claim race on `--claim`, or temporary failure returning issue to open (retries, then manual-intervention warning).
+2. Recoverable/transient failures (loop continues): transient `bd ready --json` failure (bounded retries), sync failures (`git pull`/`bd sync`) after bounded retries, claim race on `--claim`, minimal-closeout violations in warning mode, or temporary failure returning issue to open (retries, then manual-intervention warning).
+
+Minimal-closeout policy:
+1. In loop mode, agents should avoid `git pull --rebase`, `bd sync`, and `git remote prune origin` during each issue run.
+2. Current default is warning mode (`ORCA_ENFORCE_MINIMAL_LANDING=0`): violations are logged and surfaced in metrics/summaries.
+3. Planned future change (not active yet): set `ORCA_ENFORCE_MINIMAL_LANDING=1` to fail the run and return the issue to `open` on violation.
 
 Issue release retry policy:
 
@@ -148,6 +157,14 @@ Per-run logs are written to:
 
 `agent-logs/<agent-name>-<session-id>-run-<n>-<issue-id>-<timestamp>.log`
 
+Per-run compact summaries are written to:
+
+`agent-logs/<agent-name>-<session-id>-run-<n>-<issue-id>-<timestamp>-summary.md`
+
+Per-run metrics are appended to:
+
+`agent-logs/metrics.jsonl`
+
 Each run logs at least:
 
 1. session id and worktree
@@ -155,6 +172,7 @@ Each run logs at least:
 3. agent command start/finish
 4. sync/guard failures
 5. claim-release failures/retries
+6. stage timings and token usage parse status
 
 This gives a full timeline for debugging queue behavior and git-state issues.
 
@@ -167,6 +185,10 @@ This gives a full timeline for debugging queue behavior and git-state issues.
 - `READY_RETRY_SECONDS`: seconds between ready polling retries (default: `3`)
 - `SYNC_MAX_ATTEMPTS`: retries for sync stage (`git pull` + `bd sync`) before loop backoff (default: `3`)
 - `SYNC_RETRY_SECONDS`: seconds between sync retries/backoff (default: `5`)
+- `ORCA_MINIMAL_LANDING`: enable minimal-closeout policy checks (`1` default)
+- `ORCA_ENFORCE_MINIMAL_LANDING`: enforce minimal-closeout policy as hard-fail (`0` default; future strict mode switch)
+- `ORCA_TIMING_METRICS`: emit per-run timing/token metrics to `metrics.jsonl` (`1` default)
+- `ORCA_COMPACT_SUMMARY`: emit per-run summary markdown and capture final agent message when possible (`1` default)
 - `SESSION_PREFIX`: tmux session prefix (default: `bb-agent`)
 - `PROMPT_TEMPLATE`: path to prompt template (default: `scripts/orca/AGENT_PROMPT.md`)
 - `AGENT_COMMAND`: full command used for each agent pass (default: `codex exec ...`)

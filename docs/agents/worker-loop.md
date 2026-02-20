@@ -108,3 +108,8 @@ git status
 ```
 
 Work is not complete until push succeeds and status confirms sync with origin.
+
+Orca loop-mode exception:
+1. In Orca persistent loop runs, do not execute full session-end closeout commands (`git pull --rebase`, `bd sync`, `git remote prune origin`) inside each issue run.
+2. Keep loop runs minimal: commit + push + issue notes/status updates only.
+3. The outer Orca loop handles sync and integration.

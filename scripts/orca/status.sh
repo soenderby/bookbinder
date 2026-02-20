@@ -69,3 +69,36 @@ fi
 echo
 echo "== recent logs =="
 ls -1 "${ROOT}/agent-logs" 2>/dev/null || echo "(no logs yet)"
+
+echo
+echo "== recent run summaries =="
+if summary_list="$(ls -1t "${ROOT}"/agent-logs/*-summary.md 2>/dev/null)"; then
+  printf '%s\n' "${summary_list}" | head -n 10 | sed "s#^${ROOT}/##"
+else
+  echo "(no summaries yet)"
+fi
+
+echo
+echo "== latest metrics =="
+if [[ -f "${ROOT}/agent-logs/metrics.jsonl" ]]; then
+  if command -v jq >/dev/null 2>&1; then
+    if ! tail -n 5 "${ROOT}/agent-logs/metrics.jsonl" | jq -r '
+      . as $row
+      | ($row.timestamp // "unknown-time")
+        + " issue=" + ($row.issue_id // "unknown-issue")
+        + " result=" + ($row.result // "unknown")
+        + " reason=" + ($row.reason // "unknown")
+        + " total_s=" + (($row.durations_seconds.iteration_total // 0) | tostring)
+        + " tokens=" + (
+            if $row.tokens_used == null then "n/a"
+            else ($row.tokens_used | tostring) end
+          )
+    '; then
+      echo "(metrics parse failed)"
+    fi
+  else
+    tail -n 5 "${ROOT}/agent-logs/metrics.jsonl"
+  fi
+else
+  echo "(no metrics yet)"
+fi

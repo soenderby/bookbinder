@@ -94,6 +94,12 @@ ls -lt agent-logs
 
 # tail newest log file
 tail -f "$(ls -1t agent-logs | head -n 1 | sed 's#^#agent-logs/#')"
+
+# check compact run summaries
+ls -1t agent-logs/*-summary.md | head
+
+# check latest metrics rows
+tail -n 10 agent-logs/metrics.jsonl
 ```
 
 ## 5.3 Attach to a running tmux session
@@ -189,6 +195,21 @@ git push -u origin $(git branch --show-current)
 6. agent CLI command fails immediately:
 - Re-check `codex --version` and authentication.
 - Confirm `AGENT_COMMAND` override is valid if used.
+
+## 9.1 Minimal loop closeout policy
+
+Per-issue runs in Orca are expected to use minimal closeout:
+1. commit + push + issue notes/status updates
+2. avoid `git pull --rebase`, `bd sync`, and `git remote prune origin` inside each run
+3. let the outer loop handle sync/integration
+
+Current behavior:
+1. Orca logs warnings when these forbidden closeout commands are detected in run logs.
+2. This is warning-only by default.
+
+Planned future change (not active yet):
+1. Switch to strict enforcement by setting `ORCA_ENFORCE_MINIMAL_LANDING=1`.
+2. In strict mode, runs with forbidden closeout commands will be failed and the issue returned to `open`.
 
 ## 10. Operator Safety Rules
 

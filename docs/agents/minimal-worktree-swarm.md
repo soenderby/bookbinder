@@ -47,6 +47,7 @@ Only one loop can claim a given issue, which prevents duplicate work.
 
 If an agent run fails after claiming an issue, the loop automatically moves that issue back to `open`, clears assignee, and appends a failure note.
 If merge fails, the loop reopens the issue for retry and stops that worker loop for manual intervention.
+If loop-mode closeout commands violate minimal policy (`git pull --rebase`, `bd sync`, `git remote prune origin`), Orca currently logs warnings and records them in run metrics/summaries.
 
 ## Configuration Knobs
 
@@ -62,6 +63,10 @@ Environment variables:
 8. `ORCA_MERGE_TARGET_BRANCH` (default: `main`)
 9. `ORCA_MERGE_LOCK_TIMEOUT_SECONDS` (default: `120`)
 10. `ORCA_MERGE_MAX_ATTEMPTS` (default: `3`)
+11. `ORCA_MINIMAL_LANDING` (default: `1`)
+12. `ORCA_ENFORCE_MINIMAL_LANDING` (default: `0`, warning-only until strict mode is enabled)
+13. `ORCA_TIMING_METRICS` (default: `1`, writes `agent-logs/metrics.jsonl`)
+14. `ORCA_COMPACT_SUMMARY` (default: `1`, writes `*-summary.md` files)
 
 Example:
 
@@ -82,3 +87,4 @@ AGENT_REASONING_LEVEL=high ./bb orca start 2 --continuous
 4. First push from a new worktree branch may require upstream setup:
    - `git push -u origin $(git branch --show-current)`
 5. Merge integration is serialized by a global lock, so only one worker merges at a time.
+6. Planned future change (not active yet): switch to strict minimal-closeout enforcement with `ORCA_ENFORCE_MINIMAL_LANDING=1`.

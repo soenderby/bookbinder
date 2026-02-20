@@ -16,7 +16,10 @@ Required sequence:
 6. Run relevant tests/quality checks.
 7. Update documentation if behavior/workflow changed.
 8. Do not close the issue directly. The outer loop merges to main and closes the issue only after merge succeeds.
-9. Finish session with landing-the-plane steps from `AGENTS.md`, including pushing to origin.
+9. Use minimal loop-mode closeout:
+   - ensure changes are committed and pushed to your current branch
+   - do not run `git pull --rebase`, `bd sync`, or `git remote prune origin` inside this run
+   - the outer loop handles synchronization and integration
 10. If push fails due missing upstream, set it and retry:
     - `git push -u origin $(git branch --show-current)`
 

@@ -33,6 +33,10 @@ READY_MAX_ATTEMPTS="${READY_MAX_ATTEMPTS:-5}"
 READY_RETRY_SECONDS="${READY_RETRY_SECONDS:-3}"
 SYNC_MAX_ATTEMPTS="${SYNC_MAX_ATTEMPTS:-3}"
 SYNC_RETRY_SECONDS="${SYNC_RETRY_SECONDS:-5}"
+ORCA_MINIMAL_LANDING="${ORCA_MINIMAL_LANDING:-1}"
+ORCA_ENFORCE_MINIMAL_LANDING="${ORCA_ENFORCE_MINIMAL_LANDING:-0}"
+ORCA_TIMING_METRICS="${ORCA_TIMING_METRICS:-1}"
+ORCA_COMPACT_SUMMARY="${ORCA_COMPACT_SUMMARY:-1}"
 ORCA_MERGE_REMOTE="${ORCA_MERGE_REMOTE:-origin}"
 ORCA_MERGE_TARGET_BRANCH="${ORCA_MERGE_TARGET_BRANCH:-main}"
 ORCA_MERGE_LOCK_TIMEOUT_SECONDS="${ORCA_MERGE_LOCK_TIMEOUT_SECONDS:-120}"
@@ -60,6 +64,26 @@ fi
 
 if ! [[ "${SYNC_RETRY_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "SYNC_RETRY_SECONDS must be a positive integer: ${SYNC_RETRY_SECONDS}"
+  exit 1
+fi
+
+if ! [[ "${ORCA_MINIMAL_LANDING}" =~ ^[01]$ ]]; then
+  echo "ORCA_MINIMAL_LANDING must be 0 or 1: ${ORCA_MINIMAL_LANDING}"
+  exit 1
+fi
+
+if ! [[ "${ORCA_ENFORCE_MINIMAL_LANDING}" =~ ^[01]$ ]]; then
+  echo "ORCA_ENFORCE_MINIMAL_LANDING must be 0 or 1: ${ORCA_ENFORCE_MINIMAL_LANDING}"
+  exit 1
+fi
+
+if ! [[ "${ORCA_TIMING_METRICS}" =~ ^[01]$ ]]; then
+  echo "ORCA_TIMING_METRICS must be 0 or 1: ${ORCA_TIMING_METRICS}"
+  exit 1
+fi
+
+if ! [[ "${ORCA_COMPACT_SUMMARY}" =~ ^[01]$ ]]; then
+  echo "ORCA_COMPACT_SUMMARY must be 0 or 1: ${ORCA_COMPACT_SUMMARY}"
   exit 1
 fi
 
@@ -92,7 +116,35 @@ EXPECTED_BRANCH=""
 mkdir -p "${ROOT}/agent-logs"
 LOGFILE=""
 SESSION_LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}.log"
+SUMMARY_FILE=""
+LAST_MESSAGE_FILE=""
+METRICS_FILE="${ROOT}/agent-logs/metrics.jsonl"
 : > "${SESSION_LOGFILE}"
+touch "${METRICS_FILE}"
+
+RUN_NUMBER=0
+RUN_ISSUE_ID=""
+RUN_ISSUE_SAFE_ID=""
+RUN_TIMESTAMP=""
+RUN_BASE=""
+RUN_SOURCE_COMMIT=""
+RUN_AGENT_STATUS="not_run"
+RUN_MERGE_STATUS="not_run"
+RUN_CLOSE_STATUS="not_run"
+RUN_RESULT_STATUS="unknown"
+RUN_RESULT_REASON="not-set"
+RUN_SYNC_START_STATUS="not_run"
+RUN_SYNC_END_STATUS="not_run"
+RUN_SYNC_START_DURATION_SECONDS=0
+RUN_QUEUE_CLAIM_DURATION_SECONDS=0
+RUN_AGENT_DURATION_SECONDS=0
+RUN_MERGE_DURATION_SECONDS=0
+RUN_CLOSE_DURATION_SECONDS=0
+RUN_SYNC_END_DURATION_SECONDS=0
+RUN_ITERATION_TOTAL_SECONDS=0
+RUN_TOKENS_USED=""
+RUN_TOKENS_PARSE_STATUS="missing"
+RUN_FORBIDDEN_COMMANDS=""
 
 log() {
   local line
@@ -111,18 +163,43 @@ sanitize_for_filename() {
 
 start_run_logfile() {
   local issue_id="$1"
-  local run_number run_timestamp safe_issue_id
-
-  run_number=$((runs_completed + 1))
-  run_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  safe_issue_id="$(sanitize_for_filename "${issue_id}")"
-  LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}-run-${run_number}-${safe_issue_id}-${run_timestamp}.log"
+  RUN_NUMBER=$((runs_completed + 1))
+  RUN_ISSUE_ID="${issue_id}"
+  RUN_ISSUE_SAFE_ID="$(sanitize_for_filename "${issue_id}")"
+  RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  RUN_BASE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}-run-${RUN_NUMBER}-${RUN_ISSUE_SAFE_ID}-${RUN_TIMESTAMP}"
+  LOGFILE="${RUN_BASE}.log"
+  SUMMARY_FILE="${RUN_BASE}-summary.md"
+  LAST_MESSAGE_FILE="${RUN_BASE}-last-message.md"
   : > "${LOGFILE}"
 
-  log "starting run ${run_number} for ${issue_id}"
+  RUN_SOURCE_COMMIT=""
+  RUN_AGENT_STATUS="not_run"
+  RUN_MERGE_STATUS="not_run"
+  RUN_CLOSE_STATUS="not_run"
+  RUN_RESULT_STATUS="unknown"
+  RUN_RESULT_REASON="not-set"
+  RUN_SYNC_START_STATUS="not_run"
+  RUN_SYNC_END_STATUS="not_run"
+  RUN_SYNC_START_DURATION_SECONDS=0
+  RUN_QUEUE_CLAIM_DURATION_SECONDS=0
+  RUN_AGENT_DURATION_SECONDS=0
+  RUN_MERGE_DURATION_SECONDS=0
+  RUN_CLOSE_DURATION_SECONDS=0
+  RUN_SYNC_END_DURATION_SECONDS=0
+  RUN_ITERATION_TOTAL_SECONDS=0
+  RUN_TOKENS_USED=""
+  RUN_TOKENS_PARSE_STATUS="missing"
+  RUN_FORBIDDEN_COMMANDS=""
+
+  log "starting run ${RUN_NUMBER} for ${issue_id}"
   log "session id: ${AGENT_SESSION_ID}"
   log "worktree: ${WORKTREE}"
   log "merge target: ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH}"
+}
+
+now_epoch() {
+  date +%s
 }
 
 release_claim_if_needed() {
@@ -207,6 +284,231 @@ log_multiline_output() {
     [[ -z "${line}" ]] && continue
     log "${prefix}: ${line}"
   done <<< "${output}"
+}
+
+build_agent_command_for_run() {
+  RUN_AGENT_COMMAND="${AGENT_COMMAND}"
+
+  if [[ "${ORCA_COMPACT_SUMMARY}" -ne 1 ]]; then
+    return
+  fi
+
+  if [[ "${RUN_AGENT_COMMAND}" != *"codex exec"* ]]; then
+    return
+  fi
+
+  if [[ "${RUN_AGENT_COMMAND}" == *"--output-last-message"* ]]; then
+    return
+  fi
+
+  RUN_AGENT_COMMAND="${RUN_AGENT_COMMAND} --output-last-message $(printf '%q' "${LAST_MESSAGE_FILE}")"
+}
+
+detect_forbidden_landing_commands() {
+  local found=()
+
+  [[ -f "${LOGFILE}" ]] || return 1
+
+  if grep -Fq -- "-lc 'git pull --rebase" "${LOGFILE}"; then
+    found+=("git pull --rebase")
+  fi
+  if grep -Fq -- "-lc 'bd sync" "${LOGFILE}"; then
+    found+=("bd sync")
+  fi
+  if grep -Fq -- "-lc 'git remote prune origin" "${LOGFILE}"; then
+    found+=("git remote prune origin")
+  fi
+
+  if [[ "${#found[@]}" -eq 0 ]]; then
+    RUN_FORBIDDEN_COMMANDS=""
+    return 1
+  fi
+
+  RUN_FORBIDDEN_COMMANDS="$(IFS=,; printf '%s' "${found[*]}")"
+  return 0
+}
+
+extract_tokens_used_from_run_log() {
+  local raw
+  RUN_TOKENS_USED=""
+  RUN_TOKENS_PARSE_STATUS="missing"
+
+  [[ -f "${LOGFILE}" ]] || return
+
+  raw="$(awk '/^tokens used$/ {getline; print; exit}' "${LOGFILE}" | tr -d '\r')"
+  if [[ -z "${raw}" ]]; then
+    return
+  fi
+
+  raw="$(printf '%s' "${raw}" | tr -d ' ,')"
+  if [[ "${raw}" =~ ^[0-9]+$ ]]; then
+    RUN_TOKENS_USED="${raw}"
+    RUN_TOKENS_PARSE_STATUS="ok"
+    return
+  fi
+
+  RUN_TOKENS_PARSE_STATUS="parse_error"
+}
+
+append_metrics_jsonl() {
+  local tokens_json
+  local commands_csv="$1"
+
+  if [[ -n "${RUN_TOKENS_USED}" ]]; then
+    tokens_json="${RUN_TOKENS_USED}"
+  else
+    tokens_json="null"
+  fi
+
+  jq -nc \
+    --arg ts "$(date -Iseconds)" \
+    --arg agent "${AGENT_NAME}" \
+    --arg session "${AGENT_SESSION_ID}" \
+    --arg issue "${RUN_ISSUE_ID}" \
+    --arg branch "${EXPECTED_BRANCH}" \
+    --arg commit "${RUN_SOURCE_COMMIT}" \
+    --arg result "${RUN_RESULT_STATUS}" \
+    --arg reason "${RUN_RESULT_REASON}" \
+    --arg agent_status "${RUN_AGENT_STATUS}" \
+    --arg merge_status "${RUN_MERGE_STATUS}" \
+    --arg close_status "${RUN_CLOSE_STATUS}" \
+    --arg sync_start_status "${RUN_SYNC_START_STATUS}" \
+    --arg sync_end_status "${RUN_SYNC_END_STATUS}" \
+    --arg tokens_parse_status "${RUN_TOKENS_PARSE_STATUS}" \
+    --arg commands_csv "${commands_csv}" \
+    --arg summary_file "${SUMMARY_FILE}" \
+    --arg logfile "${LOGFILE}" \
+    --arg last_message_file "${LAST_MESSAGE_FILE}" \
+    --argjson run_number "${RUN_NUMBER}" \
+    --argjson tokens_used "${tokens_json}" \
+    --argjson sync_start_seconds "${RUN_SYNC_START_DURATION_SECONDS}" \
+    --argjson queue_claim_seconds "${RUN_QUEUE_CLAIM_DURATION_SECONDS}" \
+    --argjson agent_seconds "${RUN_AGENT_DURATION_SECONDS}" \
+    --argjson merge_seconds "${RUN_MERGE_DURATION_SECONDS}" \
+    --argjson close_seconds "${RUN_CLOSE_DURATION_SECONDS}" \
+    --argjson sync_end_seconds "${RUN_SYNC_END_DURATION_SECONDS}" \
+    --argjson total_seconds "${RUN_ITERATION_TOTAL_SECONDS}" \
+    '{
+      timestamp: $ts,
+      agent_name: $agent,
+      session_id: $session,
+      run_number: $run_number,
+      issue_id: $issue,
+      branch: $branch,
+      source_commit: $commit,
+      result: $result,
+      reason: $reason,
+      statuses: {
+        agent: $agent_status,
+        merge: $merge_status,
+        close: $close_status,
+        sync_start: $sync_start_status,
+        sync_end: $sync_end_status
+      },
+      durations_seconds: {
+        sync_start: $sync_start_seconds,
+        queue_claim: $queue_claim_seconds,
+        agent_run: $agent_seconds,
+        merge: $merge_seconds,
+        close: $close_seconds,
+        sync_end: $sync_end_seconds,
+        iteration_total: $total_seconds
+      },
+      tokens_used: $tokens_used,
+      tokens_parse_status: $tokens_parse_status,
+      minimal_landing_forbidden_commands: (
+        if ($commands_csv | length) > 0 then ($commands_csv | split(","))
+        else [] end
+      ),
+      files: {
+        summary: $summary_file,
+        run_log: $logfile,
+        agent_last_message: $last_message_file
+      }
+    }' >> "${METRICS_FILE}"
+}
+
+write_run_summary() {
+  local commands_csv="$1"
+  local tokens_display="$2"
+  local final_message_note="(not captured)"
+
+  if [[ -f "${LAST_MESSAGE_FILE}" ]]; then
+    final_message_note="${LAST_MESSAGE_FILE}"
+  fi
+
+  {
+    echo "# Orca Run Summary"
+    echo
+    echo "- Timestamp: $(date -Iseconds)"
+    echo "- Agent: ${AGENT_NAME}"
+    echo "- Session: ${AGENT_SESSION_ID}"
+    echo "- Run: ${RUN_NUMBER}"
+    echo "- Issue: ${RUN_ISSUE_ID}"
+    echo "- Branch: ${EXPECTED_BRANCH}"
+    echo "- Source Commit: ${RUN_SOURCE_COMMIT:-unknown}"
+    echo "- Result: ${RUN_RESULT_STATUS} (${RUN_RESULT_REASON})"
+    echo "- Statuses: agent=${RUN_AGENT_STATUS}, merge=${RUN_MERGE_STATUS}, close=${RUN_CLOSE_STATUS}, sync_start=${RUN_SYNC_START_STATUS}, sync_end=${RUN_SYNC_END_STATUS}"
+    echo "- Tokens Used: ${tokens_display} (${RUN_TOKENS_PARSE_STATUS})"
+    if [[ -n "${commands_csv}" ]]; then
+      echo "- Minimal Landing Warnings: ${commands_csv}"
+    else
+      echo "- Minimal Landing Warnings: none"
+    fi
+    echo
+    echo "## Timings (seconds)"
+    echo "- sync_start: ${RUN_SYNC_START_DURATION_SECONDS}"
+    echo "- queue_claim: ${RUN_QUEUE_CLAIM_DURATION_SECONDS}"
+    echo "- agent_run: ${RUN_AGENT_DURATION_SECONDS}"
+    echo "- merge: ${RUN_MERGE_DURATION_SECONDS}"
+    echo "- close: ${RUN_CLOSE_DURATION_SECONDS}"
+    echo "- sync_end: ${RUN_SYNC_END_DURATION_SECONDS}"
+    echo "- iteration_total: ${RUN_ITERATION_TOTAL_SECONDS}"
+    echo
+    echo "## Artifacts"
+    echo "- Run Log: ${LOGFILE}"
+    echo "- Agent Final Message: ${final_message_note}"
+  } > "${SUMMARY_FILE}"
+
+  if [[ -f "${LAST_MESSAGE_FILE}" ]]; then
+    {
+      echo
+      echo "## Agent Final Message (first 120 lines)"
+      echo
+      sed -n '1,120p' "${LAST_MESSAGE_FILE}"
+    } >> "${SUMMARY_FILE}"
+  fi
+}
+
+finalize_run_artifacts() {
+  local commands_csv=""
+  local tokens_display="n/a"
+
+  if [[ "${ORCA_MINIMAL_LANDING}" -eq 1 ]] && detect_forbidden_landing_commands; then
+    commands_csv="${RUN_FORBIDDEN_COMMANDS}"
+    log "minimal landing warning: detected forbidden closeout commands in run log: ${commands_csv}"
+  fi
+
+  extract_tokens_used_from_run_log
+  if [[ -n "${RUN_TOKENS_USED}" ]]; then
+    tokens_display="${RUN_TOKENS_USED}"
+  fi
+
+  if [[ "${ORCA_TIMING_METRICS}" -eq 1 ]]; then
+    log "timing metrics (s): sync_start=${RUN_SYNC_START_DURATION_SECONDS} queue_claim=${RUN_QUEUE_CLAIM_DURATION_SECONDS} agent=${RUN_AGENT_DURATION_SECONDS} merge=${RUN_MERGE_DURATION_SECONDS} close=${RUN_CLOSE_DURATION_SECONDS} sync_end=${RUN_SYNC_END_DURATION_SECONDS} total=${RUN_ITERATION_TOTAL_SECONDS}"
+    log "token metrics: used=${tokens_display} parse_status=${RUN_TOKENS_PARSE_STATUS}"
+    if ! append_metrics_jsonl "${commands_csv}"; then
+      log "failed to append metrics row for ${RUN_ISSUE_ID}"
+    fi
+  fi
+
+  if [[ "${ORCA_COMPACT_SUMMARY}" -eq 1 ]]; then
+    if write_run_summary "${commands_csv}" "${tokens_display}"; then
+      log "wrote run summary: ${SUMMARY_FILE}"
+    else
+      log "failed to write run summary for ${RUN_ISSUE_ID}"
+    fi
+  fi
 }
 
 recover_missing_upstream_branch_if_needed() {
@@ -361,8 +663,12 @@ merge_issue_or_return_to_open() {
   local source_commit
   local merge_failure_note
   local close_failure_note
+  local merge_started_epoch
+  local close_started_epoch
 
+  merge_started_epoch="$(now_epoch)"
   source_commit="$(git rev-parse HEAD)"
+  RUN_SOURCE_COMMIT="${source_commit}"
   log "starting merge for ${issue_id}: ${EXPECTED_BRANCH}@${source_commit} -> ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH}"
   if ! "${MERGE_SCRIPT}" \
     --source-branch "${EXPECTED_BRANCH}" \
@@ -371,6 +677,9 @@ merge_issue_or_return_to_open() {
     --target-branch "${ORCA_MERGE_TARGET_BRANCH}" \
     --lock-timeout "${ORCA_MERGE_LOCK_TIMEOUT_SECONDS}" \
     --max-attempts "${ORCA_MERGE_MAX_ATTEMPTS}" >>"${LOGFILE}" 2>&1; then
+    RUN_MERGE_DURATION_SECONDS=$(( $(now_epoch) - merge_started_epoch ))
+    RUN_MERGE_STATUS="failed"
+    RUN_CLOSE_STATUS="skipped"
     merge_failure_note="Merge failed in ${AGENT_NAME} at $(date -Iseconds). Could not merge ${EXPECTED_BRANCH} into ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH}. Returning issue to open for retry."
     if update_issue_to_open_with_retry "${issue_id}" "${merge_failure_note}" "merge-failure"; then
       log "merge failed; returned ${issue_id} to open"
@@ -384,9 +693,14 @@ merge_issue_or_return_to_open() {
 
   # Merge succeeded. Never auto-reopen this issue from signal/exit handlers now.
   current_issue_should_reopen=0
+  RUN_MERGE_DURATION_SECONDS=$(( $(now_epoch) - merge_started_epoch ))
+  RUN_MERGE_STATUS="success"
   log "merge succeeded for ${issue_id}"
 
+  close_started_epoch="$(now_epoch)"
   if close_issue_if_needed_with_retry "${issue_id}"; then
+    RUN_CLOSE_DURATION_SECONDS=$(( $(now_epoch) - close_started_epoch ))
+    RUN_CLOSE_STATUS="success"
     log "issue ${issue_id} closed after successful merge"
     current_issue_id=""
     current_issue_should_reopen=1
@@ -394,6 +708,8 @@ merge_issue_or_return_to_open() {
   fi
 
   close_failure_note="Work for ${issue_id} was merged into ${ORCA_MERGE_REMOTE}/${ORCA_MERGE_TARGET_BRANCH} at $(date -Iseconds), but automatic issue close failed. Manual close required."
+  RUN_CLOSE_DURATION_SECONDS=$(( $(now_epoch) - close_started_epoch ))
+  RUN_CLOSE_STATUS="failed"
   if append_issue_note_with_retry "${issue_id}" "${close_failure_note}" "close-after-merge-failure"; then
     log "merge completed for ${issue_id}, but issue close failed; note appended"
   else
@@ -469,18 +785,21 @@ fi
 
 while true; do
   stop_after_iteration=0
+  iteration_started_epoch="$(now_epoch)"
 
   if [[ "${MAX_RUNS}" -gt 0 && "${runs_completed}" -ge "${MAX_RUNS}" ]]; then
     log "max runs reached (${runs_completed}/${MAX_RUNS}); exiting loop"
     break
   fi
 
+  sync_start_stage_started_epoch="$(now_epoch)"
   if ! sync_with_remote_or_exit "iteration-start"; then
     log "sync failed during iteration-start after ${SYNC_MAX_ATTEMPTS} attempts; continuing loop after ${SYNC_RETRY_SECONDS}s"
     sleep "${SYNC_RETRY_SECONDS}"
     continue
   fi
 
+  queue_claim_stage_started_epoch="$(now_epoch)"
   if ! issue_id="$(next_ready_issue_with_retry)"; then
     log "ready queue polling failed after ${READY_MAX_ATTEMPTS} attempts; continuing loop after backoff"
     sleep "${READY_RETRY_SECONDS}"
@@ -502,6 +821,9 @@ while true; do
   current_issue_id="${issue_id}"
   current_issue_should_reopen=1
   start_run_logfile "${issue_id}"
+  RUN_SYNC_START_STATUS="success"
+  RUN_SYNC_START_DURATION_SECONDS=$(( $(now_epoch) - sync_start_stage_started_epoch ))
+  RUN_QUEUE_CLAIM_DURATION_SECONDS=$(( $(now_epoch) - queue_claim_stage_started_epoch ))
 
   prompt_text="$(cat "${PROMPT_TEMPLATE}")"
   prompt_text="${prompt_text//__AGENT_NAME__/${AGENT_NAME}}"
@@ -511,16 +833,62 @@ while true; do
   tmp_prompt="$(mktemp)"
   printf '%s\n' "${prompt_text}" > "${tmp_prompt}"
 
+  build_agent_command_for_run
   log "running agent command for ${issue_id}"
-  if bash -lc "${AGENT_COMMAND}" < "${tmp_prompt}" >>"${LOGFILE}" 2>&1; then
+  agent_stage_started_epoch="$(now_epoch)"
+  if bash -lc "${RUN_AGENT_COMMAND}" < "${tmp_prompt}" >>"${LOGFILE}" 2>&1; then
+    RUN_AGENT_DURATION_SECONDS=$(( $(now_epoch) - agent_stage_started_epoch ))
+    RUN_AGENT_STATUS="success"
     log "agent command finished for ${issue_id}"
     guard_worktree_state_or_exit "post-agent:${issue_id}"
-    if ! merge_issue_or_return_to_open "${issue_id}"; then
-      stop_after_iteration=1
+
+    RUN_SOURCE_COMMIT="$(git rev-parse HEAD)"
+
+    if [[ "${ORCA_MINIMAL_LANDING}" -eq 1 ]] && detect_forbidden_landing_commands; then
+      if [[ "${ORCA_ENFORCE_MINIMAL_LANDING}" -eq 1 ]]; then
+        enforcement_note="Detected forbidden closeout commands in ${AGENT_NAME} at $(date -Iseconds): ${RUN_FORBIDDEN_COMMANDS}. Returning issue to open for retry."
+        if update_issue_to_open_with_retry "${issue_id}" "${enforcement_note}" "minimal-landing-enforced"; then
+          log "minimal landing enforcement: returned ${issue_id} to open"
+        else
+          log "minimal landing enforcement failed to return ${issue_id} to open; manual intervention needed"
+        fi
+        RUN_MERGE_STATUS="skipped"
+        RUN_CLOSE_STATUS="skipped"
+        RUN_RESULT_STATUS="failed"
+        RUN_RESULT_REASON="minimal-landing-enforced"
+        current_issue_id=""
+        current_issue_should_reopen=1
+        stop_after_iteration=1
+      fi
+    fi
+
+    if [[ "${stop_after_iteration}" -eq 0 ]]; then
+      if merge_issue_or_return_to_open "${issue_id}"; then
+        RUN_RESULT_STATUS="success"
+        RUN_RESULT_REASON="merged-and-closed"
+      else
+        if [[ "${RUN_MERGE_STATUS}" == "failed" ]]; then
+          RUN_RESULT_STATUS="failed"
+          RUN_RESULT_REASON="merge-failure"
+        elif [[ "${RUN_CLOSE_STATUS}" == "failed" ]]; then
+          RUN_RESULT_STATUS="failed"
+          RUN_RESULT_REASON="close-after-merge-failure"
+        else
+          RUN_RESULT_STATUS="failed"
+          RUN_RESULT_REASON="merge-or-finalization-failure"
+        fi
+        stop_after_iteration=1
+      fi
     fi
   else
+    RUN_AGENT_DURATION_SECONDS=$(( $(now_epoch) - agent_stage_started_epoch ))
+    RUN_AGENT_STATUS="failed"
+    RUN_MERGE_STATUS="skipped"
+    RUN_CLOSE_STATUS="skipped"
+    RUN_RESULT_STATUS="failed"
+    RUN_RESULT_REASON="agent-command-failure"
     log "agent command failed for ${issue_id}; returning issue to open"
-    failure_note="Agent loop failure in ${AGENT_NAME} at $(date -Iseconds). Command: ${AGENT_COMMAND}. Returning issue to open for retry."
+    failure_note="Agent loop failure in ${AGENT_NAME} at $(date -Iseconds). Command: ${RUN_AGENT_COMMAND}. Returning issue to open for retry."
     if update_issue_to_open_with_retry "${issue_id}" "${failure_note}" "agent-command-failure"; then
       log "returned ${issue_id} to open"
     else
@@ -532,10 +900,19 @@ while true; do
 
   rm -f "${tmp_prompt}"
 
+  sync_end_stage_started_epoch="$(now_epoch)"
   if ! sync_with_remote_or_exit "iteration-end"; then
+    RUN_SYNC_END_STATUS="failed"
+    RUN_SYNC_END_DURATION_SECONDS=$(( $(now_epoch) - sync_end_stage_started_epoch ))
     log "sync failed during iteration-end after ${SYNC_MAX_ATTEMPTS} attempts; continuing loop after ${SYNC_RETRY_SECONDS}s"
     sleep "${SYNC_RETRY_SECONDS}"
+  else
+    RUN_SYNC_END_STATUS="success"
+    RUN_SYNC_END_DURATION_SECONDS=$(( $(now_epoch) - sync_end_stage_started_epoch ))
   fi
+
+  RUN_ITERATION_TOTAL_SECONDS=$(( $(now_epoch) - iteration_started_epoch ))
+  finalize_run_artifacts
 
   runs_completed=$((runs_completed + 1))
   if [[ "${MAX_RUNS}" -eq 0 ]]; then
