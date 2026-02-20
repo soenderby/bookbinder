@@ -84,6 +84,36 @@ def test_upload_generate_and_download(tmp_path: Path) -> None:
     assert resolved.suffix.lower() == ".pdf"
 
 
+def test_health_endpoint_contract(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_index_form_contains_required_mvp_controls(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/")
+    assert response.status_code == 200
+
+    html = response.text
+    assert 'id="file"' in html
+    assert 'name="file"' in html
+    assert 'id="paper_size"' in html
+    assert 'name="paper_size"' in html
+    assert 'id="signature_length"' in html
+    assert 'name="signature_length"' in html
+    assert 'id="flyleafs"' in html
+    assert 'name="flyleafs"' in html
+    assert 'id="duplex_rotate"' in html
+    assert 'name="duplex_rotate"' in html
+    assert 'type="submit"' in html
+
+
 def test_same_filename_uploads_get_unique_request_scoped_artifacts(tmp_path: Path) -> None:
     options = _default_options()
     payload = _pdf_bytes(9)
