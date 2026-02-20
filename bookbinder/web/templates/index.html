@@ -47,5 +47,67 @@
       </section>
       {% endif %}
     </main>
+    <script>
+      (function () {
+        const storageKey = "bookbinder.form.v1";
+        const form = document.querySelector('form[action="/impose"]');
+        if (!form || typeof window.localStorage === "undefined") {
+          return;
+        }
+
+        const persistable = Array.from(form.elements).filter((element) => {
+          return (
+            element instanceof HTMLInputElement ||
+            element instanceof HTMLSelectElement ||
+            element instanceof HTMLTextAreaElement
+          );
+        }).filter((element) => {
+          return element.name && element.type !== "file" && element.type !== "submit" && element.type !== "button";
+        });
+
+        const saveSettings = function () {
+          const snapshot = {};
+          for (const element of persistable) {
+            if (element instanceof HTMLInputElement && element.type === "checkbox") {
+              snapshot[element.name] = element.checked;
+            } else if (element instanceof HTMLInputElement && element.type === "radio") {
+              if (element.checked) {
+                snapshot[element.name] = element.value;
+              }
+            } else {
+              snapshot[element.name] = element.value;
+            }
+          }
+          window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+        };
+
+        const raw = window.localStorage.getItem(storageKey);
+        if (raw) {
+          try {
+            const saved = JSON.parse(raw);
+            if (saved && typeof saved === "object") {
+              for (const element of persistable) {
+                if (!Object.prototype.hasOwnProperty.call(saved, element.name)) {
+                  continue;
+                }
+                const value = saved[element.name];
+                if (element instanceof HTMLInputElement && element.type === "checkbox") {
+                  element.checked = value === true;
+                } else if (element instanceof HTMLInputElement && element.type === "radio") {
+                  element.checked = String(value) === element.value;
+                } else {
+                  element.value = String(value);
+                }
+              }
+            }
+          } catch (error) {
+            window.localStorage.removeItem(storageKey);
+          }
+        }
+
+        form.addEventListener("input", saveSettings);
+        form.addEventListener("change", saveSettings);
+      })();
+    </script>
   </body>
 </html>

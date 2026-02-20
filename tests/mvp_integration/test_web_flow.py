@@ -112,6 +112,10 @@ def test_index_form_contains_required_mvp_controls(tmp_path: Path) -> None:
     assert 'id="duplex_rotate"' in html
     assert 'name="duplex_rotate"' in html
     assert 'type="submit"' in html
+    assert 'bookbinder.form.v1' in html
+    assert 'window.localStorage' in html
+    assert 'form.addEventListener("input", saveSettings);' in html
+    assert 'form.addEventListener("change", saveSettings);' in html
 
 
 def test_same_filename_uploads_get_unique_request_scoped_artifacts(tmp_path: Path) -> None:
