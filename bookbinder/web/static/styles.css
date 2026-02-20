@@ -70,6 +70,15 @@ button {
   font-weight: 700;
 }
 
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.actions button {
+  flex: 1;
+}
+
 .result-success {
   border-color: #2f855a;
 }

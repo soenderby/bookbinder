@@ -14,7 +14,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 from pypdf.errors import PdfReadError
 
 from bookbinder.constants import (
@@ -35,6 +35,9 @@ _EXPIRED_ARTIFACT_MESSAGE = "This download link has expired after cleanup. Regen
 _CUSTOM_PAPER_SIZE = "Custom"
 _POINTS_PER_MM = 72.0 / 25.4
 _LOGGER = logging.getLogger("bookbinder.web")
+_PREVIEW_ACTION = "preview"
+_GENERATE_ACTION = "generate"
+_SUPPORTED_ACTIONS = {_PREVIEW_ACTION, _GENERATE_ACTION}
 
 
 @dataclass(frozen=True)
@@ -263,6 +266,7 @@ def _impose_payload(
 
     return {
         "status": "success",
+        "mode": _GENERATE_ACTION,
         "message": "Imposition complete.",
         "download_url": f"/download/{request_id}/{output_name}",
         "output_filename": output_name,
@@ -277,6 +281,32 @@ def _impose_payload(
             "slots": [asdict(slot) for slot in preview_artifact.slots],
         },
     }, None
+
+
+def _parse_request_download_url(download_url: str) -> tuple[str, str]:
+    _, _, request_id, filename = download_url.split("/", 3)
+    return request_id, filename
+
+
+def _preview_filename_from_output(output_name: str) -> str:
+    return f"{Path(output_name).stem}_preview_sheet1.pdf"
+
+
+def _write_first_sheet_preview(*, imposed_path: Path, preview_path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    if not imposed_path.is_file():
+        return None, "Unable to locate generated output for preview."
+
+    reader = PdfReader(str(imposed_path))
+    if not reader.pages:
+        return None, "Generated output has no pages to preview."
+
+    writer = PdfWriter()
+    writer.add_page(reader.pages[0])
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    with preview_path.open("wb") as handle:
+        writer.write(handle)
+
+    return {"preview_pages": 1}, None
 
 
 def _resolve_request_artifact_path(artifact_dir: Path, request_id: str, filename: str) -> Path:
@@ -367,6 +397,7 @@ def create_app(
     async def impose(
         request: Request,
         file: UploadFile | None = File(default=None),
+        action: str = Form(_GENERATE_ACTION),
         paper_size: str = Form("A4"),
         signature_length: int = Form(6, ge=1),
         flyleafs: int = Form(0, ge=0),
@@ -379,12 +410,23 @@ def create_app(
             logging.INFO,
             "impose.request.received",
             job_id=job_id,
+            action=action,
             paper_size=paper_size,
             signature_length=signature_length,
             flyleafs=flyleafs,
             duplex_rotate=duplex_rotate,
             has_upload=file is not None and bool(file.filename),
         )
+        normalized_action = action.strip().lower()
+        if normalized_action not in _SUPPORTED_ACTIONS:
+            error = f"Invalid action '{action}'."
+            _log_event(logging.WARNING, "impose.request.invalid_action", job_id=job_id, action=action, error=error)
+            return render_index(
+                request,
+                result={"status": "error", "message": error},
+                status_code=400,
+            )
+
         options, form_values, form_error = _parse_form_input(
             paper_size=paper_size,
             signature_length=signature_length,
@@ -448,13 +490,66 @@ def create_app(
                 status_code=500,
             )
 
+        if normalized_action == _PREVIEW_ACTION:
+            request_id, output_filename = _parse_request_download_url(result["download_url"])
+            request_artifact_dir = app.state.artifact_dir / request_id
+            preview_filename = _preview_filename_from_output(output_filename)
+            preview_path = request_artifact_dir / preview_filename
+            preview_meta, preview_error = _write_first_sheet_preview(
+                imposed_path=request_artifact_dir / output_filename,
+                preview_path=preview_path,
+            )
+            if preview_error is not None:
+                _log_event(
+                    logging.WARNING,
+                    "preview.request.failed",
+                    job_id=job_id,
+                    source_name=source_name,
+                    error=preview_error,
+                )
+                return render_index(
+                    request,
+                    result={"status": "error", "message": preview_error},
+                    form_values=form_values,
+                    status_code=400,
+                )
+
+            if preview_meta is None:
+                _log_event(logging.ERROR, "preview.request.missing_result", job_id=job_id, source_name=source_name)
+                return render_index(
+                    request,
+                    result={"status": "error", "message": "Preview generation failed."},
+                    form_values=form_values,
+                    status_code=500,
+                )
+
+            result = {
+                "status": "success",
+                "mode": _PREVIEW_ACTION,
+                "message": "Preview ready for sheet 1.",
+                "preview_pages": preview_meta["preview_pages"],
+                "preview_url": f"/download/{request_id}/{preview_filename}",
+                "preview_filename": preview_filename,
+                "download_url": result["download_url"],
+                "output_filename": result["output_filename"],
+                "output_pages": result["output_pages"],
+            }
+            _log_event(
+                logging.INFO,
+                "preview.request.succeeded",
+                job_id=job_id,
+                source_name=source_name,
+                preview_filename=preview_filename,
+                preview_url=result["preview_url"],
+            )
+
         _log_event(
             logging.INFO,
             "impose.request.succeeded",
             job_id=job_id,
             source_name=source_name,
             output_filename=result["output_filename"],
-            output_pages=result["output_pages"],
+            output_pages=result.get("output_pages"),
             download_url=result["download_url"],
         )
         return render_index(request, result=result, form_values=form_values)

@@ -190,10 +190,64 @@ def test_index_form_contains_required_mvp_controls(tmp_path: Path) -> None:
     assert 'id="duplex_rotate"' in html
     assert 'name="duplex_rotate"' in html
     assert 'type="submit"' in html
+    assert 'name="action"' in html
+    assert 'value="generate"' in html
+    assert 'value="preview"' in html
+    assert "Preview first sheet" in html
     assert 'bookbinder.form.v1' in html
     assert 'window.localStorage' in html
     assert 'form.addEventListener("input", saveSettings);' in html
     assert 'form.addEventListener("change", saveSettings);' in html
+
+
+def test_preview_action_renders_preview_artifact_link(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/impose",
+        data={
+            "action": "preview",
+            "paper_size": "A4",
+            "signature_length": "6",
+            "flyleafs": "0",
+            "custom_width_mm": "",
+            "custom_height_mm": "",
+        },
+        files={"file": ("input.pdf", _pdf_bytes(9), "application/pdf")},
+    )
+    assert response.status_code == 200
+    assert "Preview ready for sheet 1." in response.text
+    assert "Preview pages: 1" in response.text
+    match = re.search(r"/download/([a-f0-9]{32})/([^\"']+_preview_sheet1\.pdf)", response.text)
+    assert match is not None
+
+    request_id, preview_name = match.group(1), match.group(2)
+    preview_path = _resolve_request_artifact_path(tmp_path, request_id, preview_name)
+    preview_reader = PdfReader(preview_path)
+    assert len(preview_reader.pages) == 1
+
+
+def test_generate_action_still_renders_output_link(tmp_path: Path) -> None:
+    app = create_app(artifact_dir=tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/impose",
+        data={
+            "action": "generate",
+            "paper_size": "A4",
+            "signature_length": "6",
+            "flyleafs": "0",
+            "custom_width_mm": "",
+            "custom_height_mm": "",
+        },
+        files={"file": ("input.pdf", _pdf_bytes(9), "application/pdf")},
+    )
+    assert response.status_code == 200
+    assert "Imposition complete." in response.text
+    assert "Output pages: 6" in response.text
+    assert re.search(r"/download/[a-f0-9]{32}/[^\"']+_imposed_duplex\.pdf", response.text) is not None
 
 
 def test_same_filename_uploads_get_unique_request_scoped_artifacts(tmp_path: Path) -> None:

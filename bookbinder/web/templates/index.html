@@ -40,16 +40,23 @@
           Duplex rotate
         </label>
 
-        <button type="submit">Generate</button>
+        <div class="actions">
+          <button type="submit" name="action" value="generate">Generate</button>
+          <button type="submit" name="action" value="preview">Preview first sheet</button>
+        </div>
       </form>
 
       {% if result %}
       <section class="panel result result-{{ result.status }}">
         <h2>{{ result.status | capitalize }}</h2>
         <p>{{ result.message }}</p>
-        {% if result.status == "success" %}
+        {% if result.status == "success" and "output_pages" in result %}
         <p>Output pages: {{ result.output_pages }}</p>
         <a href="{{ result.download_url }}" download>Download {{ result.output_filename }}</a>
+        {% endif %}
+        {% if result.status == "success" and "preview_pages" in result %}
+        <p>Preview pages: {{ result.preview_pages }}</p>
+        <a href="{{ result.preview_url }}" download>Download {{ result.preview_filename }}</a>
         {% endif %}
       </section>
       {% endif %}
