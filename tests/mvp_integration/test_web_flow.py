@@ -44,6 +44,7 @@ def _default_options() -> ImpositionOptions:
         signature_length=6,
         flyleafs=0,
         duplex_rotate=False,
+        scaling_mode="proportional",
     )
     assert error is None
     return options
@@ -123,6 +124,8 @@ def test_index_form_contains_required_mvp_controls(tmp_path: Path) -> None:
     assert 'name="file"' in html
     assert 'id="paper_size"' in html
     assert 'name="paper_size"' in html
+    assert 'id="scaling_mode"' in html
+    assert 'name="scaling_mode"' in html
     assert 'id="signature_length"' in html
     assert 'name="signature_length"' in html
     assert 'id="flyleafs"' in html
@@ -378,6 +381,19 @@ def test_parse_form_input_rejects_invalid_paper_size() -> None:
         signature_length=6,
         flyleafs=0,
         duplex_rotate=False,
+        scaling_mode="proportional",
     )
     assert form_values["paper_size"] == "Tabloid"
     assert error == "Invalid paper size. Choose A4 or Letter."
+
+
+def test_parse_form_input_rejects_invalid_scaling_mode() -> None:
+    _, form_values, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=6,
+        flyleafs=0,
+        duplex_rotate=False,
+        scaling_mode="zoom",
+    )
+    assert form_values["scaling_mode"] == "zoom"
+    assert error == "Invalid scaling mode. Choose proportional, stretch, or original."

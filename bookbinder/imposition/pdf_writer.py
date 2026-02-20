@@ -3,12 +3,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 
 from pypdf import PdfReader, PdfWriter, Transformation
 
 from bookbinder.constants import PAPER_SIZES
 from bookbinder.imposition.core import BLANK_PAGE, PageToken, impose_signature
+
+ScalingMode = Literal["proportional", "stretch", "original"]
+_SCALING_MODES: tuple[ScalingMode, ...] = ("proportional", "stretch", "original")
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,8 @@ class SlotGeometry:
     x_offset: float
     y_offset: float
     scale: float | None
+    scale_x: float | None
+    scale_y: float | None
 
 
 @dataclass(frozen=True)
@@ -61,23 +66,55 @@ def deterministic_output_filename(source_name: str) -> str:
     return f"{slug}_imposed_duplex.pdf"
 
 
-def _slot_transform(source_page, slot_index: int, output_width: float, output_height: float) -> Transformation:
+def _resolve_scales(
+    *,
+    source_width: float,
+    source_height: float,
+    slot_width: float,
+    slot_height: float,
+    scaling_mode: ScalingMode,
+) -> tuple[float, float]:
+    if scaling_mode == "proportional":
+        scale = min(slot_width / source_width, slot_height / source_height)
+        return scale, scale
+    if scaling_mode == "stretch":
+        return slot_width / source_width, slot_height / source_height
+    if scaling_mode == "original":
+        return 1.0, 1.0
+
+    valid = ", ".join(_SCALING_MODES)
+    raise ValueError(f"unsupported scaling mode '{scaling_mode}', expected one of: {valid}")
+
+
+def _slot_transform(
+    source_page,
+    slot_index: int,
+    output_width: float,
+    output_height: float,
+    scaling_mode: ScalingMode,
+) -> Transformation:
     source_width = float(source_page.mediabox.width)
     source_height = float(source_page.mediabox.height)
 
     slot_width = output_width / 2.0
     slot_height = output_height
 
-    scale = min(slot_width / source_width, slot_height / source_height)
-    rendered_width = source_width * scale
-    rendered_height = source_height * scale
+    scale_x, scale_y = _resolve_scales(
+        source_width=source_width,
+        source_height=source_height,
+        slot_width=slot_width,
+        slot_height=slot_height,
+        scaling_mode=scaling_mode,
+    )
+    rendered_width = source_width * scale_x
+    rendered_height = source_height * scale_y
 
     x_offset = (slot_width - rendered_width) / 2.0
     if slot_index == 1:
         x_offset += slot_width
 
     y_offset = (slot_height - rendered_height) / 2.0
-    return Transformation().scale(scale).translate(x_offset, y_offset)
+    return Transformation().scale(scale_x, scale_y).translate(x_offset, y_offset)
 
 
 def _slot_geometry(
@@ -87,6 +124,7 @@ def _slot_geometry(
     output_width: float,
     output_height: float,
     blank_token: str,
+    scaling_mode: ScalingMode = "proportional",
 ) -> SlotGeometry:
     slot_width = output_width / 2.0
     slot_height = output_height
@@ -106,6 +144,8 @@ def _slot_geometry(
             x_offset=slot_x,
             y_offset=0.0,
             scale=None,
+            scale_x=None,
+            scale_y=None,
         )
 
     if not isinstance(token, int):
@@ -114,9 +154,15 @@ def _slot_geometry(
     source_page = reader.pages[token]
     source_width = float(source_page.mediabox.width)
     source_height = float(source_page.mediabox.height)
-    scale = min(slot_width / source_width, slot_height / source_height)
-    rendered_width = source_width * scale
-    rendered_height = source_height * scale
+    scale_x, scale_y = _resolve_scales(
+        source_width=source_width,
+        source_height=source_height,
+        slot_width=slot_width,
+        slot_height=slot_height,
+        scaling_mode=scaling_mode,
+    )
+    rendered_width = source_width * scale_x
+    rendered_height = source_height * scale_y
     x_offset = slot_x + (slot_width - rendered_width) / 2.0
     y_offset = (slot_height - rendered_height) / 2.0
 
@@ -131,7 +177,9 @@ def _slot_geometry(
         rendered_height=rendered_height,
         x_offset=x_offset,
         y_offset=y_offset,
-        scale=scale,
+        scale=scale_x if scale_x == scale_y else None,
+        scale_x=scale_x,
+        scale_y=scale_y,
     )
 
 
@@ -143,6 +191,7 @@ def _place_token(
     output_width: float,
     output_height: float,
     blank_token: str,
+    scaling_mode: ScalingMode = "proportional",
 ) -> None:
     if token == blank_token:
         return
@@ -151,7 +200,13 @@ def _place_token(
         raise ValueError(f"expected int page token or blank token, got {token!r}")
 
     source_page = reader.pages[token]
-    transform = _slot_transform(source_page, slot_index, output_width, output_height)
+    transform = _slot_transform(
+        source_page,
+        slot_index,
+        output_width,
+        output_height,
+        scaling_mode=scaling_mode,
+    )
     imposed_page.merge_transformed_page(source_page, transform)
 
 
@@ -171,6 +226,7 @@ def write_first_sheet_preview(
     output_path: Path,
     paper_size: str,
     duplex_rotate: bool,
+    scaling_mode: ScalingMode = "proportional",
     blank_token: str = BLANK_PAGE,
 ) -> PreviewArtifact:
     output_width, output_height = resolve_paper_dimensions(paper_size)
@@ -194,6 +250,7 @@ def write_first_sheet_preview(
         output_width=output_width,
         output_height=output_height,
         blank_token=blank_token,
+        scaling_mode=scaling_mode,
     )
     _place_token(
         imposed_page,
@@ -203,6 +260,7 @@ def write_first_sheet_preview(
         output_width=output_width,
         output_height=output_height,
         blank_token=blank_token,
+        scaling_mode=scaling_mode,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,6 +274,7 @@ def write_first_sheet_preview(
         output_width=output_width,
         output_height=output_height,
         blank_token=blank_token,
+        scaling_mode=scaling_mode,
     )
     right_geometry = _slot_geometry(
         reader=reader,
@@ -224,6 +283,7 @@ def write_first_sheet_preview(
         output_width=output_width,
         output_height=output_height,
         blank_token=blank_token,
+        scaling_mode=scaling_mode,
     )
 
     return PreviewArtifact(
@@ -242,6 +302,7 @@ def write_duplex_aggregated_pdf(
     output_path: Path,
     paper_size: str,
     duplex_rotate: bool,
+    scaling_mode: ScalingMode = "proportional",
     blank_token: str = BLANK_PAGE,
 ) -> GeneratedArtifact:
     output_width, output_height = resolve_paper_dimensions(paper_size)
@@ -261,6 +322,7 @@ def write_duplex_aggregated_pdf(
                 output_width=output_width,
                 output_height=output_height,
                 blank_token=blank_token,
+                scaling_mode=scaling_mode,
             )
             _place_token(
                 imposed_page,
@@ -270,6 +332,7 @@ def write_duplex_aggregated_pdf(
                 output_width=output_width,
                 output_height=output_height,
                 blank_token=blank_token,
+                scaling_mode=scaling_mode,
             )
             placed_tokens.append((side.left, side.right))
 

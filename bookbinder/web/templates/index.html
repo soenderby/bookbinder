@@ -22,6 +22,13 @@
           {% endfor %}
         </select>
 
+        <label for="scaling_mode">Scaling mode</label>
+        <select id="scaling_mode" name="scaling_mode">
+          {% for mode in scaling_modes %}
+          <option value="{{ mode }}" {{ "selected" if form.scaling_mode == mode else "" }}>{{ mode }}</option>
+          {% endfor %}
+        </select>
+
         <label for="signature_length">Signature length (sheets)</label>
         <input id="signature_length" name="signature_length" type="number" min="1" value="{{ form.signature_length }}" required />
 
