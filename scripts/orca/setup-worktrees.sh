@@ -20,6 +20,17 @@ ensure_upstream() {
   local upstream_remote
   local upstream_branch
   local ls_remote_status
+  local current_branch=""
+
+  if ! git -C "${worktree_path}" show-ref --verify --quiet "refs/heads/${branch_name}"; then
+    current_branch="$(git -C "${worktree_path}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ -n "${current_branch}" && "${current_branch}" != "HEAD" ]]; then
+      echo "[setup] warning: ${branch_name} not present in ${worktree_path}; using existing checkout ${current_branch}"
+    else
+      echo "[setup] warning: ${branch_name} not present in ${worktree_path}; skipping upstream setup"
+    fi
+    return 0
+  fi
 
   upstream_ref="$(git -C "${worktree_path}" for-each-ref --format='%(upstream:short)' "refs/heads/${branch_name}")"
   if [[ -n "${upstream_ref}" ]]; then
