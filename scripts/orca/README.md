@@ -125,7 +125,7 @@ Agents must write a JSON object to `ORCA_RUN_SUMMARY_PATH` (also provided in pro
 
 Each iteration:
 
-1. creates run artifacts (`*.log`, `*-summary.json`, optional `*-summary.md`)
+1. creates run artifacts (`run.log`, `summary.json`, optional `summary.md`) under session/run directories
 2. renders `AGENT_PROMPT.md` placeholders (agent/worktree/summary/discovery/primary-repo/lock-helper paths)
 3. executes agent command once
 4. parses summary JSON when present
@@ -207,19 +207,23 @@ Orca handles transport/observability errors. Agents handle workflow policy.
 
 Session logs:
 
-`agent-logs/<agent-name>-<session-id>.log`
+`agent-logs/sessions/YYYY/MM/DD/<session-id>/session.log`
 
 Per-run logs:
 
-`agent-logs/<agent-name>-<session-id>-run-<n>-<timestamp>.log`
+`agent-logs/sessions/YYYY/MM/DD/<session-id>/runs/<run-id>/run.log`
 
 Per-run summary JSON:
 
-`agent-logs/<agent-name>-<session-id>-run-<n>-<timestamp>-summary.json`
+`agent-logs/sessions/YYYY/MM/DD/<session-id>/runs/<run-id>/summary.json`
 
 Per-run compact summary markdown:
 
-`agent-logs/<agent-name>-<session-id>-run-<n>-<timestamp>-summary.md`
+`agent-logs/sessions/YYYY/MM/DD/<session-id>/runs/<run-id>/summary.md`
+
+Per-run final message capture:
+
+`agent-logs/sessions/YYYY/MM/DD/<session-id>/runs/<run-id>/last-message.md`
 
 Metrics stream:
 
@@ -228,6 +232,10 @@ Metrics stream:
 Per-agent discovery notes:
 
 `agent-logs/discoveries/<agent-name>.md`
+
+Archived legacy logs:
+
+`agent-logs/archive/<timestamp>/...`
 
 Discovery path is injected to agents as:
 

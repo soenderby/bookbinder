@@ -21,7 +21,7 @@ Use Orca when you want to:
 3. Agent-owned lifecycle:
    - Agents claim work, update issue status, merge/push, and close issues.
 4. Operational clarity:
-   - Every run leaves traceable artifacts (`*.log`, `*-summary.json`, `metrics.jsonl`, discovery logs).
+   - Every run leaves traceable artifacts (`run.log`, `summary.json`, `metrics.jsonl`, discovery logs).
 
 ## When to Use Orca
 
@@ -83,7 +83,7 @@ Bounded mode:
 
 ```bash
 ./bb orca status
-ls -lt agent-logs
+find agent-logs/sessions -type f | sort | tail -n 20
 tail -n 10 agent-logs/metrics.jsonl
 ```
 
@@ -170,7 +170,7 @@ Scale down cleanly:
 
 1. Agent requests stop (`loop_action=stop`):
    - expected for no-work or explicit shutdown conditions
-   - inspect latest `*-summary.json` / `*-summary.md`, then restart if needed
+   - inspect latest `summary.json` / `summary.md` under `agent-logs/sessions/.../runs/...`, then restart if needed
 2. Agent claim races:
    - normal in parallel operation; agent should select another issue
 3. Merge/push failures:

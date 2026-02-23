@@ -37,6 +37,19 @@ DOLT_BIND_HOST="${DOLT_BIND_HOST:-127.0.0.1}"
 DOLT_BIND_PORT="${DOLT_BIND_PORT:-3307}"
 DOLT_SERVER_PORT="${DOLT_SERVER_PORT:-3306}"
 
+session_date_path() {
+  local session_id="$1"
+  local stamp
+
+  if [[ "${session_id}" =~ ([0-9]{8})T[0-9]{6}Z ]]; then
+    stamp="${BASH_REMATCH[1]}"
+    printf '%s/%s/%s\n' "${stamp:0:4}" "${stamp:4:2}" "${stamp:6:2}"
+    return 0
+  fi
+
+  date -u +%Y/%m/%d
+}
+
 ensure_dolt_server() {
   local dolt_data_dir
   local exists
@@ -244,13 +257,13 @@ for i in $(seq 1 "${COUNT}"); do
 
   sleep 1
   if ! tmux has-session -t "${session}" 2>/dev/null; then
-    session_log="${ROOT}/agent-logs/agent-${i}-${session_id}.log"
+    session_log="${ROOT}/agent-logs/sessions/$(session_date_path "${session_id}")/${session_id}/session.log"
     echo "[start] warning: ${session} exited during startup" >&2
     if [[ -f "${session_log}" ]]; then
       echo "[start] recent startup log (${session_log}):" >&2
       tail -n 20 "${session_log}" >&2 || true
     else
-      echo "[start] no session log found yet; inspect agent-logs/" >&2
+      echo "[start] no session log found yet; inspect agent-logs/sessions/" >&2
     fi
   fi
 done

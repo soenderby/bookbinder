@@ -33,6 +33,8 @@ MAX_RUNS="${MAX_RUNS:-0}"
 RUN_SLEEP_SECONDS="${RUN_SLEEP_SECONDS:-2}"
 ORCA_TIMING_METRICS="${ORCA_TIMING_METRICS:-1}"
 ORCA_COMPACT_SUMMARY="${ORCA_COMPACT_SUMMARY:-1}"
+AGENT_LOG_ROOT="${ROOT}/agent-logs"
+SESSION_LOG_ROOT="${AGENT_LOG_ROOT}/sessions"
 
 if ! [[ "${MAX_RUNS}" =~ ^[0-9]+$ ]]; then
   echo "MAX_RUNS must be a non-negative integer (0 means unbounded mode): ${MAX_RUNS}" >&2
@@ -74,14 +76,20 @@ if [[ ! -x "${LOCK_HELPER_PATH}" ]]; then
   exit 1
 fi
 
-mkdir -p "${ROOT}/agent-logs"
-SESSION_LOGFILE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}.log"
-METRICS_FILE="${ROOT}/agent-logs/metrics.jsonl"
-DISCOVERY_LOG_DIR="${ROOT}/agent-logs/discoveries"
+SESSION_DATE_PATH="$(date -u +%Y/%m/%d)"
+if [[ "${AGENT_SESSION_ID}" =~ ([0-9]{8})T[0-9]{6}Z ]]; then
+  session_stamp="${BASH_REMATCH[1]}"
+  SESSION_DATE_PATH="${session_stamp:0:4}/${session_stamp:4:2}/${session_stamp:6:2}"
+fi
+SESSION_DIR="${SESSION_LOG_ROOT}/${SESSION_DATE_PATH}/${AGENT_SESSION_ID}"
+SESSION_RUNS_DIR="${SESSION_DIR}/runs"
+SESSION_LOGFILE="${SESSION_DIR}/session.log"
+METRICS_FILE="${AGENT_LOG_ROOT}/metrics.jsonl"
+DISCOVERY_LOG_DIR="${AGENT_LOG_ROOT}/discoveries"
 DISCOVERY_LOG_FILE="${DISCOVERY_LOG_DIR}/${AGENT_NAME}.md"
+mkdir -p "${SESSION_RUNS_DIR}" "${DISCOVERY_LOG_DIR}"
 : > "${SESSION_LOGFILE}"
 touch "${METRICS_FILE}"
-mkdir -p "${DISCOVERY_LOG_DIR}"
 touch "${DISCOVERY_LOG_FILE}"
 
 runs_completed=0
@@ -95,6 +103,7 @@ RUN_AGENT_COMMAND=""
 RUN_NUMBER=0
 RUN_TIMESTAMP=""
 RUN_BASE=""
+RUN_DIR=""
 RUN_EXIT_CODE=0
 RUN_DURATION_SECONDS=0
 RUN_RESULT=""
@@ -130,12 +139,14 @@ now_epoch() {
 start_run_artifacts() {
   RUN_NUMBER=$((runs_completed + 1))
   RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%S%NZ)"
-  RUN_BASE="${ROOT}/agent-logs/${AGENT_NAME}-${AGENT_SESSION_ID}-run-${RUN_NUMBER}-${RUN_TIMESTAMP}"
-  LOGFILE="${RUN_BASE}.log"
-  SUMMARY_FILE="${RUN_BASE}-summary.md"
-  SUMMARY_JSON_FILE="${RUN_BASE}-summary.json"
-  LAST_MESSAGE_FILE="${RUN_BASE}-last-message.md"
+  RUN_DIR="${SESSION_RUNS_DIR}/$(printf '%04d-%s' "${RUN_NUMBER}" "${RUN_TIMESTAMP}")"
+  RUN_BASE="${RUN_DIR}"
+  LOGFILE="${RUN_DIR}/run.log"
+  SUMMARY_FILE="${RUN_DIR}/summary.md"
+  SUMMARY_JSON_FILE="${RUN_DIR}/summary.json"
+  LAST_MESSAGE_FILE="${RUN_DIR}/last-message.md"
 
+  mkdir -p "${RUN_DIR}"
   : > "${LOGFILE}"
 
   RUN_AGENT_COMMAND=""
