@@ -93,7 +93,14 @@ ensure_dolt_server() {
 
   for ((attempt=1; attempt<=DOLT_READY_MAX_ATTEMPTS; attempt+=1)); do
     if docker exec "${DOLT_CONTAINER_NAME}" dolt sql -q "SELECT 1;" >/dev/null 2>&1; then
+      if (( attempt > 1 )); then
+        echo "[start] Dolt SQL server ready after ${attempt} attempts"
+      fi
       break
+    fi
+
+    if (( attempt == 1 )); then
+      echo "[start] waiting for Dolt SQL server readiness"
     fi
 
     if (( attempt == DOLT_READY_MAX_ATTEMPTS )); then

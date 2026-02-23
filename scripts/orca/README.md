@@ -158,7 +158,7 @@ Behavior:
 4. invokes `setup-worktrees.sh` before launching sessions
 5. injects runtime knobs into each session
 6. ensures Dolt SQL server container is running (`bookbinder-dolt` by default)
-7. waits for Dolt SQL readiness before running setup queries
+7. waits for Dolt SQL readiness before running setup queries and surfaces timeout diagnostics from container logs
 8. ensures SQL auth includes `root@'%'` for local TCP client compatibility
 
 ### `agent-loop.sh`
@@ -202,7 +202,7 @@ Tuning knobs:
 
 Orca handles transport/observability errors. Agents handle workflow policy.
 
-1. startup hard-stop failures: invalid config/env/worktree/prompt path
+1. startup hard-stop failures: invalid config/env/worktree/prompt path or Dolt readiness timeout
 2. run-level failures: non-zero agent exit, missing/invalid summary JSON, metrics append failure
 3. controlled stop: run limit reached or agent summary requests stop
 

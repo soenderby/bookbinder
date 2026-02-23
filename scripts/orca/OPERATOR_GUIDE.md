@@ -71,7 +71,7 @@ Also ensure:
 ./bb orca start 2 --continuous
 ```
 
-`orca start` now also starts (or creates) the local Dolt SQL server container (`bookbinder-dolt` by default) for beads server mode.
+`orca start` now also starts (or creates) the local Dolt SQL server container (`bookbinder-dolt` by default) for beads server mode, waits for SQL readiness, and fails fast with container-log diagnostics if startup does not become ready.
 
 Bounded mode:
 
@@ -95,7 +95,7 @@ tail -n 10 agent-logs/metrics.jsonl
 ./bb orca stop
 ```
 
-`orca stop` stops running Orca sessions and then stops the Dolt SQL server container.
+`orca stop` stops running Orca sessions (if any) and then stops the Dolt SQL server container.
 
 ## What the Loop Does vs What Agents Do
 
