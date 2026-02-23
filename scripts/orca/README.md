@@ -145,8 +145,10 @@ Startup checks:
 5. `ORCA_TIMING_METRICS` and `ORCA_COMPACT_SUMMARY` are `0|1`
 6. `ORCA_LOCK_SCOPE` matches `[A-Za-z0-9._-]+`
 7. `ORCA_LOCK_TIMEOUT_SECONDS` positive integer
-8. `AGENT_REASONING_LEVEL` (if set) matches `[A-Za-z0-9._-]+`
-9. `PROMPT_TEMPLATE` exists
+8. `DOLT_READY_MAX_ATTEMPTS` positive integer
+9. `DOLT_READY_WAIT_SECONDS` non-negative integer
+10. `AGENT_REASONING_LEVEL` (if set) matches `[A-Za-z0-9._-]+`
+11. `PROMPT_TEMPLATE` exists
 
 Behavior:
 
@@ -156,7 +158,8 @@ Behavior:
 4. invokes `setup-worktrees.sh` before launching sessions
 5. injects runtime knobs into each session
 6. ensures Dolt SQL server container is running (`bookbinder-dolt` by default)
-7. ensures SQL auth includes `root@'%'` for local TCP client compatibility
+7. waits for Dolt SQL readiness before running setup queries
+8. ensures SQL auth includes `root@'%'` for local TCP client compatibility
 
 ### `agent-loop.sh`
 
@@ -268,3 +271,5 @@ Primary repo and lock helper are injected to agents as:
 - `DOLT_BIND_PORT`: host port for Dolt SQL server (default `3307`)
 - `DOLT_SERVER_PORT`: Dolt SQL server port inside container (default `3306`)
 - `DOLT_DATA_DIR`: host path mounted to Dolt data dir (default `<repo-root>/.beads/dolt`)
+- `DOLT_READY_MAX_ATTEMPTS`: Dolt SQL readiness retries before failing startup (default `30`)
+- `DOLT_READY_WAIT_SECONDS`: sleep between readiness retries (default `1`)

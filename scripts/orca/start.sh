@@ -36,6 +36,8 @@ DOLT_IMAGE="${DOLT_IMAGE:-dolthub/dolt:latest}"
 DOLT_BIND_HOST="${DOLT_BIND_HOST:-127.0.0.1}"
 DOLT_BIND_PORT="${DOLT_BIND_PORT:-3307}"
 DOLT_SERVER_PORT="${DOLT_SERVER_PORT:-3306}"
+DOLT_READY_MAX_ATTEMPTS="${DOLT_READY_MAX_ATTEMPTS:-30}"
+DOLT_READY_WAIT_SECONDS="${DOLT_READY_WAIT_SECONDS:-1}"
 
 session_date_path() {
   local session_id="$1"
@@ -54,6 +56,7 @@ ensure_dolt_server() {
   local dolt_data_dir
   local exists
   local is_running
+  local attempt
 
   if ! command -v docker >/dev/null 2>&1; then
     echo "[start] missing prerequisite: docker (required for Dolt server mode)" >&2
@@ -87,6 +90,21 @@ ensure_dolt_server() {
       --port "${DOLT_SERVER_PORT}" \
       --data-dir /var/lib/dolt >/dev/null
   fi
+
+  for ((attempt=1; attempt<=DOLT_READY_MAX_ATTEMPTS; attempt+=1)); do
+    if docker exec "${DOLT_CONTAINER_NAME}" dolt sql -q "SELECT 1;" >/dev/null 2>&1; then
+      break
+    fi
+
+    if (( attempt == DOLT_READY_MAX_ATTEMPTS )); then
+      echo "[start] Dolt SQL server did not become ready after ${DOLT_READY_MAX_ATTEMPTS} attempts" >&2
+      echo "[start] recent Dolt container logs (${DOLT_CONTAINER_NAME}):" >&2
+      docker logs --tail 20 "${DOLT_CONTAINER_NAME}" >&2 || true
+      exit 1
+    fi
+
+    sleep "${DOLT_READY_WAIT_SECONDS}"
+  done
 
   docker exec "${DOLT_CONTAINER_NAME}" dolt sql -q \
     "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY ''; \
@@ -194,6 +212,16 @@ fi
 
 if ! [[ "${ORCA_LOCK_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "[start] ORCA_LOCK_TIMEOUT_SECONDS must be a positive integer: ${ORCA_LOCK_TIMEOUT_SECONDS}" >&2
+  exit 1
+fi
+
+if ! [[ "${DOLT_READY_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[start] DOLT_READY_MAX_ATTEMPTS must be a positive integer: ${DOLT_READY_MAX_ATTEMPTS}" >&2
+  exit 1
+fi
+
+if ! [[ "${DOLT_READY_WAIT_SECONDS}" =~ ^[0-9]+$ ]]; then
+  echo "[start] DOLT_READY_WAIT_SECONDS must be a non-negative integer: ${DOLT_READY_WAIT_SECONDS}" >&2
   exit 1
 fi
 
