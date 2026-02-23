@@ -141,6 +141,63 @@ check_prerequisites() {
   fi
 }
 
+worktree_is_clean() {
+  local worktree="$1"
+  [[ -z "$(git -C "${worktree}" status --porcelain --untracked-files=normal 2>/dev/null)" ]]
+}
+
+validate_worktree_readiness_for_start() {
+  local index="$1"
+  local session="${SESSION_PREFIX}-${index}"
+  local worktree="${ROOT}/worktrees/agent-${index}"
+  local branch_name
+  local status_lines
+  local line
+
+  if tmux has-session -t "${session}" 2>/dev/null; then
+    return 0
+  fi
+
+  if ! git -C "${worktree}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "[start] expected git worktree is missing or invalid: ${worktree}" >&2
+    return 1
+  fi
+
+  if worktree_is_clean "${worktree}"; then
+    return 0
+  fi
+
+  branch_name="$(git -C "${worktree}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  echo "[start] worktree is not clean and cannot safely create run branches: ${worktree}" >&2
+  echo "[start] checked branch: ${branch_name:-unknown}" >&2
+  echo "[start] fix: commit/stash/discard changes in this worktree, then rerun start" >&2
+  status_lines="$(git -C "${worktree}" status --short 2>/dev/null || true)"
+  if [[ -n "${status_lines}" ]]; then
+    while IFS= read -r line; do
+      [[ -z "${line}" ]] && continue
+      echo "[start]   ${line}" >&2
+    done <<< "${status_lines}"
+  fi
+
+  return 1
+}
+
+validate_all_worktrees_before_launch() {
+  local i
+  local failed=0
+
+  for i in $(seq 1 "${COUNT}"); do
+    if ! validate_worktree_readiness_for_start "${i}"; then
+      failed=1
+    fi
+  done
+
+  if [[ "${failed}" -eq 1 ]]; then
+    echo "[start] refusing to launch sessions until all non-running agent worktrees are clean" >&2
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --runs)
@@ -260,6 +317,7 @@ echo "[start] run mode: ${mode_message}"
 ensure_dolt_server
 
 "${SCRIPT_DIR}/setup-worktrees.sh" "${COUNT}"
+validate_all_worktrees_before_launch
 
 for i in $(seq 1 "${COUNT}"); do
   session="${SESSION_PREFIX}-${i}"

@@ -193,6 +193,9 @@ select_run_base_ref() {
 
 prepare_run_branch() {
   local base_ref
+  local worktree_status
+  local checkout_error
+  local line
 
   if git remote get-url origin >/dev/null 2>&1; then
     if ! git fetch --quiet origin main; then
@@ -202,6 +205,16 @@ prepare_run_branch() {
 
   if ! base_ref="$(select_run_base_ref)"; then
     log "fatal: unable to determine base ref (expected origin/main or main)"
+    return 1
+  fi
+
+  worktree_status="$(git status --short 2>/dev/null || true)"
+  if [[ -n "${worktree_status}" ]]; then
+    log "fatal: worktree has uncommitted changes and cannot switch to ${base_ref} for run branch setup"
+    while IFS= read -r line; do
+      [[ -z "${line}" ]] && continue
+      log "worktree status: ${line}"
+    done <<< "${worktree_status}"
     return 1
   fi
 
@@ -221,8 +234,14 @@ prepare_run_branch() {
     return 1
   fi
 
-  if ! git checkout -b "${RUN_BRANCH_NAME}" "${base_ref}" >/dev/null 2>&1; then
+  if ! checkout_error="$(git checkout -b "${RUN_BRANCH_NAME}" "${base_ref}" 2>&1)"; then
     log "fatal: failed to create run branch ${RUN_BRANCH_NAME} from ${base_ref}"
+    if [[ -n "${checkout_error}" ]]; then
+      while IFS= read -r line; do
+        [[ -z "${line}" ]] && continue
+        log "git checkout: ${line}"
+      done <<< "${checkout_error}"
+    fi
     return 1
   fi
 

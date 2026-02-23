@@ -147,8 +147,9 @@ Startup checks:
 7. `ORCA_LOCK_TIMEOUT_SECONDS` positive integer
 8. `DOLT_READY_MAX_ATTEMPTS` positive integer
 9. `DOLT_READY_WAIT_SECONDS` non-negative integer
-10. `AGENT_REASONING_LEVEL` (if set) matches `[A-Za-z0-9._-]+`
-11. `PROMPT_TEMPLATE` exists
+10. each non-running agent worktree is clean (`git status --porcelain` empty)
+11. `AGENT_REASONING_LEVEL` (if set) matches `[A-Za-z0-9._-]+`
+12. `PROMPT_TEMPLATE` exists
 
 Behavior:
 
@@ -160,6 +161,7 @@ Behavior:
 6. ensures Dolt SQL server container is running (`bookbinder-dolt` by default)
 7. waits for Dolt SQL readiness before running setup queries and surfaces timeout diagnostics from container logs
 8. ensures SQL auth includes `root@'%'` for local TCP client compatibility
+9. refuses to launch sessions when a non-running agent worktree is dirty, with per-path status output
 
 ### `agent-loop.sh`
 
@@ -184,7 +186,7 @@ Signal handling:
 
 1. prints an `orca health` summary (sessions, agent worktrees, primary repo dirty count, metrics rollup)
 2. prints Dolt database status (mode, server config, docker container state, bd connectivity)
-3. emits explicit alerts for high-signal conditions (no sessions, stale metrics, non-completed latest run, Dolt server down/failed)
+3. emits explicit alerts for high-signal conditions (no sessions, stale metrics, non-completed latest run, Dolt server down/failed, dirty agent worktrees)
 4. prints per-agent latest activity from `metrics.jsonl` (result, issue, age, duration, tokens, loop action)
 5. prints recent attention events (non-`completed` and non-`no_work` runs)
 6. prints tmux sessions and git worktrees
@@ -202,7 +204,7 @@ Tuning knobs:
 
 Orca handles transport/observability errors. Agents handle workflow policy.
 
-1. startup hard-stop failures: invalid config/env/worktree/prompt path or Dolt readiness timeout
+1. startup hard-stop failures: invalid config/env/worktree/prompt path, Dolt readiness timeout, or dirty non-running agent worktree
 2. run-level failures: non-zero agent exit, missing/invalid summary JSON, metrics append failure
 3. controlled stop: run limit reached or agent summary requests stop
 

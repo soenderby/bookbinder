@@ -71,7 +71,7 @@ Also ensure:
 ./bb orca start 2 --continuous
 ```
 
-`orca start` now also starts (or creates) the local Dolt SQL server container (`bookbinder-dolt` by default) for beads server mode, waits for SQL readiness, and fails fast with container-log diagnostics if startup does not become ready.
+`orca start` now also starts (or creates) the local Dolt SQL server container (`bookbinder-dolt` by default), waits for SQL readiness, and fails fast with diagnostics if startup does not become ready or a non-running agent worktree is dirty.
 
 Bounded mode:
 
@@ -87,7 +87,7 @@ find agent-logs/sessions -type f | sort | tail -n 20
 tail -n 10 agent-logs/metrics.jsonl
 ```
 
-`orca status` includes a Dolt database section with mode, server config, container state, and `bd` connectivity check.
+`orca status` includes a Dolt database section with mode, server config, container state, `bd` connectivity check, and agent-worktree hygiene alerts.
 
 ### 4) Stop
 
@@ -179,6 +179,9 @@ Scale down cleanly:
    - require a pre-merge cleanliness check on `ORCA_PRIMARY_REPO` (`git diff --quiet` and `git diff --cached --quiet`) so dirty `main` fails before fetch/merge
 4. Immediate agent command failures:
    - verify CLI auth/config and `AGENT_COMMAND`
+5. Run branch setup failure due dirty worktree:
+   - check `git -C worktrees/agent-N status --short`
+   - commit/stash/discard changes in that worktree, then rerun `./bb orca start`
 
 ## Safety Rules
 

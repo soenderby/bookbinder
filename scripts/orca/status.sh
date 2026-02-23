@@ -242,10 +242,31 @@ if ! worktree_list="$(git worktree list 2>/dev/null)"; then
   worktree_list=""
 fi
 
-agent_worktree_count="$(
+agent_worktree_paths="$(
   printf '%s\n' "${worktree_list}" \
-    | awk -v root="${ROOT}/worktrees/agent-" '$1 ~ "^" root {count++} END {print count+0}'
+    | awk -v root="${ROOT}/worktrees/agent-" '$1 ~ "^" root {print $1}'
 )"
+
+agent_worktree_count="$(
+  printf '%s\n' "${agent_worktree_paths}" \
+    | sed '/^[[:space:]]*$/d' \
+    | wc -l \
+    | tr -d '[:space:]'
+)"
+
+dirty_agent_worktree_count=0
+dirty_agent_worktree_rows=""
+if [[ -n "${agent_worktree_paths}" ]]; then
+  while IFS= read -r worktree_path; do
+    [[ -z "${worktree_path}" ]] && continue
+    dirty_path_count="$(git -C "${worktree_path}" status --porcelain --untracked-files=normal 2>/dev/null | wc -l | tr -d '[:space:]')"
+    if [[ "${dirty_path_count}" =~ ^[1-9][0-9]*$ ]]; then
+      dirty_agent_worktree_count="$((dirty_agent_worktree_count + 1))"
+      agent_name="$(basename "${worktree_path}")"
+      dirty_agent_worktree_rows+="${agent_name}${FIELD_SEP}${worktree_path}${FIELD_SEP}${dirty_path_count}"$'\n'
+    fi
+  done <<< "${agent_worktree_paths}"
+fi
 
 main_dirty_count="$(git -C "${ROOT}" status --porcelain 2>/dev/null | wc -l | tr -d '[:space:]')"
 
@@ -387,6 +408,10 @@ if [[ "${main_dirty_count}" -gt 0 ]]; then
   add_alert "Primary repo has ${main_dirty_count} uncommitted path(s)."
 fi
 
+if [[ "${dirty_agent_worktree_count}" -gt 0 ]]; then
+  add_alert "${dirty_agent_worktree_count} agent worktree(s) have uncommitted changes; next start may fail run branch setup."
+fi
+
 if [[ "${dolt_mode}" == "server" ]]; then
   if [[ "${dolt_container_state}" != "running" ]]; then
     add_alert "Dolt server container ${DOLT_CONTAINER_NAME} is ${dolt_container_state}."
@@ -423,6 +448,7 @@ else
   echo "sessions (${SESSION_PREFIX}-*): tmux not installed"
 fi
 echo "agent worktrees: ${agent_worktree_count}"
+echo "dirty agent worktrees: ${dirty_agent_worktree_count}"
 echo "primary repo dirty paths: ${main_dirty_count}"
 
 if [[ "${metrics_summary_available}" -eq 1 ]]; then
@@ -489,6 +515,17 @@ if [[ -n "${agent_activity_rows}" ]]; then
   done <<< "${agent_activity_rows}"
 else
   echo "(no parsed metrics rows)"
+fi
+
+echo
+echo "== agent worktree hygiene =="
+if [[ -n "${dirty_agent_worktree_rows}" ]]; then
+  while IFS="${FIELD_SEP}" read -r agent_name worktree_path dirty_path_count; do
+    [[ -z "${agent_name}" ]] && continue
+    echo "- ${agent_name}: dirty_paths=${dirty_path_count} path=${worktree_path}"
+  done <<< "${dirty_agent_worktree_rows}"
+else
+  echo "(all agent worktrees clean)"
 fi
 
 echo
