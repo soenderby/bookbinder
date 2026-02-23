@@ -8,14 +8,13 @@ sessions="$(tmux ls -F '#S' 2>/dev/null | grep "^${SESSION_PREFIX}-" || true)"
 
 if [[ -z "${sessions}" ]]; then
   echo "[stop] no sessions with prefix ${SESSION_PREFIX}"
-  exit 0
+else
+  while IFS= read -r s; do
+    [[ -z "${s}" ]] && continue
+    echo "[stop] killing ${s}"
+    tmux kill-session -t "${s}"
+  done <<< "${sessions}"
 fi
-
-while IFS= read -r s; do
-  [[ -z "${s}" ]] && continue
-  echo "[stop] killing ${s}"
-  tmux kill-session -t "${s}"
-done <<< "${sessions}"
 
 if command -v docker >/dev/null 2>&1; then
   dolt_running="$(docker inspect -f '{{.State.Running}}' "${DOLT_CONTAINER_NAME}" 2>/dev/null || true)"
