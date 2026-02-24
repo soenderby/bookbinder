@@ -218,7 +218,9 @@ prepare_run_branch() {
     return 1
   fi
 
-  RUN_BRANCH_NAME="swarm/${AGENT_NAME}/${AGENT_SESSION_ID}/run-${RUN_NUMBER}-${RUN_TIMESTAMP}"
+  # Keep run branches as a flat ref under swarm/ to avoid colliding with
+  # persistent agent refs like refs/heads/swarm/agent-1.
+  RUN_BRANCH_NAME="swarm/${AGENT_NAME}-run-${AGENT_SESSION_ID}-${RUN_NUMBER}-${RUN_TIMESTAMP}"
   if ! [[ "${RUN_BRANCH_NAME}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
     log "fatal: generated invalid run branch name: ${RUN_BRANCH_NAME}"
     return 1
