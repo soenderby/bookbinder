@@ -75,6 +75,36 @@ def split_signatures(
     return signatures
 
 
+def split_signatures_by_sheet_counts(
+    ordered_pages: Sequence[PageToken],
+    signature_sheet_counts: Sequence[int],
+) -> list[list[PageToken]]:
+    pages = list(ordered_pages)
+
+    if len(pages) % 4 != 0:
+        raise ValueError("ordered_pages must be padded to a multiple of 4")
+    if not signature_sheet_counts:
+        raise ValueError("custom signature list cannot be empty")
+
+    if any(sheet_count <= 0 for sheet_count in signature_sheet_counts):
+        raise ValueError("custom signature list must contain only positive integers")
+
+    expected_pages = sum(signature_sheet_counts) * 4
+    if expected_pages != len(pages):
+        raise ValueError(
+            f"custom signature list defines {expected_pages // 4} sheets but document requires {len(pages) // 4} sheets"
+        )
+
+    signatures: list[list[PageToken]] = []
+    start = 0
+    for sheet_count in signature_sheet_counts:
+        end = start + (sheet_count * 4)
+        signatures.append(pages[start:end])
+        start = end
+
+    return signatures
+
+
 def build_ordered_pages(
     source_pages: Sequence[int],
     flyleaf_sets: int,

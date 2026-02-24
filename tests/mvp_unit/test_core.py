@@ -9,6 +9,7 @@ from bookbinder.imposition.core import (
     insert_flyleafs,
     pad_to_multiple_of_four,
     split_signatures,
+    split_signatures_by_sheet_counts,
 )
 
 pytestmark = pytest.mark.mvp_unit
@@ -28,6 +29,18 @@ def test_signature_splitting_uses_standard_signature_length() -> None:
     ordered = list(range(20))
     signatures = split_signatures(ordered, sig_length_sheets=3)
     assert signatures == [list(range(12)), list(range(12, 20))]
+
+
+def test_signature_splitting_uses_custom_sheet_counts() -> None:
+    ordered = list(range(24))
+    signatures = split_signatures_by_sheet_counts(ordered, signature_sheet_counts=[1, 2, 3])
+    assert signatures == [list(range(4)), list(range(4, 12)), list(range(12, 24))]
+
+
+def test_signature_splitting_rejects_custom_sheet_count_mismatch() -> None:
+    ordered = list(range(24))
+    with pytest.raises(ValueError, match="document requires 6 sheets"):
+        split_signatures_by_sheet_counts(ordered, signature_sheet_counts=[2, 2])
 
 
 def test_folio_mapping_duplex_normal() -> None:

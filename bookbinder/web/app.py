@@ -22,7 +22,11 @@ from bookbinder.constants import (
     DEFAULT_ARTIFACT_RETENTION_SECONDS,
     PAPER_SIZES,
 )
-from bookbinder.imposition.core import build_ordered_pages, split_signatures
+from bookbinder.imposition.core import (
+    build_ordered_pages,
+    split_signatures,
+    split_signatures_by_sheet_counts,
+)
 from bookbinder.imposition.pdf_writer import (
     _POSITIONING_MODES,
     _SCALING_MODES,
@@ -43,12 +47,16 @@ _GENERATE_ACTION = "generate"
 _SUPPORTED_ACTIONS = {_PREVIEW_ACTION, _GENERATE_ACTION}
 OutputMode = Literal["aggregated", "signatures", "both"]
 _OUTPUT_MODES: tuple[OutputMode, ...] = ("aggregated", "signatures", "both")
+SignatureMode = Literal["standardsig", "customsig"]
+_SIGNATURE_MODES: tuple[SignatureMode, ...] = ("standardsig", "customsig")
 
 
 @dataclass(frozen=True)
 class ImpositionOptions:
     paper_size: str
     signature_length: int
+    signature_mode: SignatureMode
+    custom_signature_sheets: tuple[int, ...] | None
     flyleafs: int
     duplex_rotate: bool
     custom_width_points: float | None
@@ -109,6 +117,8 @@ def _parse_form_input(
     *,
     paper_size: str,
     signature_length: int,
+    signature_mode: str = "standardsig",
+    custom_signature_config: str = "",
     flyleafs: int,
     duplex_rotate: bool,
     custom_width_mm: str,
@@ -118,6 +128,8 @@ def _parse_form_input(
     output_mode: str,
 ) -> tuple[ImpositionOptions, dict[str, Any], str | None]:
     normalized_paper_size = paper_size.strip()
+    normalized_signature_mode = signature_mode.strip().lower()
+    normalized_custom_signature_config = custom_signature_config.strip()
     normalized_output_mode = output_mode.strip().lower()
     normalized_positioning_mode = positioning_mode.strip()
     width_mm_value = custom_width_mm.strip()
@@ -126,6 +138,8 @@ def _parse_form_input(
     options = ImpositionOptions(
         paper_size=normalized_paper_size,
         signature_length=signature_length,
+        signature_mode="standardsig",
+        custom_signature_sheets=None,
         flyleafs=flyleafs,
         duplex_rotate=duplex_rotate,
         custom_width_points=None,
@@ -137,6 +151,8 @@ def _parse_form_input(
     form_values: dict[str, Any] = {
         "paper_size": options.paper_size,
         "signature_length": options.signature_length,
+        "signature_mode": normalized_signature_mode,
+        "custom_signature_config": normalized_custom_signature_config,
         "flyleafs": options.flyleafs,
         "duplex_rotate": options.duplex_rotate,
         "custom_width_mm": width_mm_value,
@@ -153,6 +169,9 @@ def _parse_form_input(
         return options, form_values, f"Invalid paper size. Choose one of: {valid_sizes}."
     if options.scaling_mode not in _SCALING_MODES:
         return options, form_values, "Invalid scaling mode. Choose proportional, stretch, or original."
+    if normalized_signature_mode not in _SIGNATURE_MODES:
+        valid_signature_modes = ", ".join(_SIGNATURE_MODES)
+        return options, form_values, f"Invalid signature mode. Choose one of: {valid_signature_modes}."
     try:
         resolved_positioning_mode = resolve_positioning_mode(options.positioning_mode)
     except ValueError:
@@ -164,6 +183,8 @@ def _parse_form_input(
     options = ImpositionOptions(
         paper_size=options.paper_size,
         signature_length=options.signature_length,
+        signature_mode=normalized_signature_mode,
+        custom_signature_sheets=None,
         flyleafs=options.flyleafs,
         duplex_rotate=options.duplex_rotate,
         custom_width_points=options.custom_width_points,
@@ -172,6 +193,12 @@ def _parse_form_input(
         positioning_mode=resolved_positioning_mode,
         output_mode=normalized_output_mode,
     )
+
+    if options.signature_mode == "customsig":
+        custom_sheets, custom_signature_error = _parse_custom_signature_config(normalized_custom_signature_config)
+        if custom_signature_error is not None:
+            return options, form_values, custom_signature_error
+        options = replace(options, custom_signature_sheets=custom_sheets)
 
     if options.paper_size == _CUSTOM_PAPER_SIZE:
         try:
@@ -186,6 +213,8 @@ def _parse_form_input(
         options = ImpositionOptions(
             paper_size=options.paper_size,
             signature_length=options.signature_length,
+            signature_mode=options.signature_mode,
+            custom_signature_sheets=options.custom_signature_sheets,
             flyleafs=options.flyleafs,
             duplex_rotate=options.duplex_rotate,
             custom_width_points=width_mm * _POINTS_PER_MM,
@@ -196,6 +225,25 @@ def _parse_form_input(
         )
 
     return options, form_values, None
+
+
+def _parse_custom_signature_config(config: str) -> tuple[tuple[int, ...] | None, str | None]:
+    if not config:
+        return None, "Custom signature list is required when signature mode is customsig (example: 10,10,8)."
+
+    tokens = [part.strip() for part in config.split(",")]
+    if any(token == "" for token in tokens):
+        return None, "Custom signature list must be comma-separated positive integers (example: 10,10,8)."
+
+    try:
+        parsed = tuple(int(token) for token in tokens)
+    except ValueError:
+        return None, "Custom signature list must be comma-separated positive integers (example: 10,10,8)."
+
+    if any(value <= 0 for value in parsed):
+        return None, "Custom signature list must contain only positive integers (sheets per signature)."
+
+    return parsed, None
 
 
 def _validate_upload_metadata(file: UploadFile | None) -> tuple[str | None, str | None]:
@@ -240,7 +288,15 @@ def _impose_payload(
 
     source_pages = list(range(len(reader.pages)))
     ordered_pages = build_ordered_pages(source_pages, flyleaf_sets=options.flyleafs)
-    signatures = split_signatures(ordered_pages, sig_length_sheets=options.signature_length)
+    try:
+        if options.signature_mode == "customsig":
+            if options.custom_signature_sheets is None:
+                return None, "Custom signature list is required when signature mode is customsig."
+            signatures = split_signatures_by_sheet_counts(ordered_pages, options.custom_signature_sheets)
+        else:
+            signatures = split_signatures(ordered_pages, sig_length_sheets=options.signature_length)
+    except ValueError as exc:
+        return None, f"Invalid signature configuration: {exc}."
 
     removed = _cleanup_stale_artifacts(
         artifact_dir,
@@ -455,6 +511,8 @@ def create_app(
     ) -> HTMLResponse:
         defaults = {
             "paper_size": "A4",
+            "signature_mode": "standardsig",
+            "custom_signature_config": "",
             "signature_length": 6,
             "flyleafs": 0,
             "duplex_rotate": False,
@@ -476,6 +534,7 @@ def create_app(
                 "scaling_modes": list(_SCALING_MODES),
                 "positioning_modes": list(_POSITIONING_MODES),
                 "output_modes": _OUTPUT_MODES,
+                "signature_modes": _SIGNATURE_MODES,
                 "form": defaults,
             },
             status_code=status_code,
@@ -496,6 +555,8 @@ def create_app(
         action: str = Form(_GENERATE_ACTION),
         paper_size: str = Form("A4"),
         signature_length: int = Form(6, ge=1),
+        signature_mode: str = Form("standardsig"),
+        custom_signature_config: str = Form(""),
         flyleafs: int = Form(0, ge=0),
         duplex_rotate: bool = Form(False),
         custom_width_mm: str = Form(""),
@@ -512,6 +573,8 @@ def create_app(
             action=action,
             paper_size=paper_size,
             signature_length=signature_length,
+            signature_mode=signature_mode,
+            custom_signature_config=custom_signature_config,
             flyleafs=flyleafs,
             duplex_rotate=duplex_rotate,
             output_mode=output_mode,
