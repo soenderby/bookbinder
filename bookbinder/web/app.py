@@ -114,7 +114,7 @@ def _parse_form_input(
     custom_width_mm: str,
     custom_height_mm: str,
     scaling_mode: str,
-    positioning_mode: str,
+    positioning_mode: str = "centered",
     output_mode: str,
 ) -> tuple[ImpositionOptions, dict[str, Any], str | None]:
     normalized_paper_size = paper_size.strip()

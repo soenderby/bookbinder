@@ -43,6 +43,7 @@ def test_parse_form_input_rejects_invalid_controls(
         custom_width_mm="",
         custom_height_mm="",
         scaling_mode=scaling_mode,
+        positioning_mode="centered",
         output_mode=output_mode,
     )
 
@@ -75,6 +76,7 @@ def test_parse_form_input_rejects_invalid_custom_dimensions(
         custom_width_mm=width_mm,
         custom_height_mm=height_mm,
         scaling_mode="proportional",
+        positioning_mode="centered",
         output_mode="aggregated",
     )
 
@@ -90,6 +92,7 @@ def test_parse_form_input_accepts_custom_dimensions_and_normalizes_output_mode()
         custom_width_mm=" 210 ",
         custom_height_mm=" 297 ",
         scaling_mode="stretch",
+        positioning_mode="centered",
         output_mode=" BOTH ",
     )
 

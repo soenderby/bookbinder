@@ -39,17 +39,26 @@ def test_editable_install_smoke_with_generated_dir(tmp_path: Path) -> None:
     generated_dir.mkdir(exist_ok=True)
 
     venv_dir = tmp_path / "editable-smoke-venv"
-    subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True, cwd=ROOT)
+    subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)], check=True, cwd=ROOT)
 
     venv_python = venv_dir / "bin" / "python"
     if os.name == "nt":
         venv_python = venv_dir / "Scripts" / "python.exe"
 
+    backend_check = subprocess.run(
+        [str(venv_python), "-c", "import setuptools.build_meta"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if backend_check.returncode != 0:
+        pytest.skip("setuptools.build_meta is unavailable in this offline test environment")
+
     env = os.environ.copy()
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     env["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
     install = subprocess.run(
-        [str(venv_python), "-m", "pip", "install", "--no-deps", "-e", str(ROOT)],
+        [str(venv_python), "-m", "pip", "install", "--no-deps", "--no-build-isolation", "-e", str(ROOT)],
         cwd=ROOT,
         env=env,
         capture_output=True,
