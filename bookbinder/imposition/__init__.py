@@ -11,6 +11,7 @@ from bookbinder.imposition.core import (
     pad_to_multiple_of_four,
     pages_per_signature,
     split_signatures,
+    split_signatures_by_sheet_counts,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "pad_to_multiple_of_four",
     "pages_per_signature",
     "split_signatures",
+    "split_signatures_by_sheet_counts",
 ]

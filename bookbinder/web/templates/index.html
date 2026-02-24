@@ -45,6 +45,24 @@
 
         <label for="signature_length">Signature length (sheets)</label>
         <input id="signature_length" name="signature_length" type="number" min="1" value="{{ form.signature_length }}" required />
+        <p class="hint">Used when signature mode is <code>standardsig</code>.</p>
+
+        <label for="signature_mode">Signature mode</label>
+        <select id="signature_mode" name="signature_mode">
+          {% for mode in signature_modes %}
+          <option value="{{ mode }}" {{ "selected" if form.signature_mode == mode else "" }}>{{ mode }}</option>
+          {% endfor %}
+        </select>
+
+        <label for="custom_signature_config">Custom signature list (sheets)</label>
+        <input
+          id="custom_signature_config"
+          name="custom_signature_config"
+          type="text"
+          value="{{ form.custom_signature_config }}"
+          placeholder="10,10,8"
+        />
+        <p class="hint">Used when signature mode is <code>customsig</code>; values are comma-separated sheets per signature.</p>
 
         <label for="flyleafs">Flyleaf sets</label>
         <input id="flyleafs" name="flyleafs" type="number" min="0" value="{{ form.flyleafs }}" required />

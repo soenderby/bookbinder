@@ -191,6 +191,10 @@ def test_index_form_contains_required_mvp_controls(tmp_path: Path) -> None:
     assert 'name="positioning_mode"' in html
     assert 'id="signature_length"' in html
     assert 'name="signature_length"' in html
+    assert 'id="signature_mode"' in html
+    assert 'name="signature_mode"' in html
+    assert 'id="custom_signature_config"' in html
+    assert 'name="custom_signature_config"' in html
     assert 'id="custom_width_mm"' in html
     assert 'name="custom_width_mm"' in html
     assert 'id="custom_height_mm"' in html

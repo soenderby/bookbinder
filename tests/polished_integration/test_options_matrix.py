@@ -146,3 +146,60 @@ def test_output_metadata_page_counts_align_with_signature_breakdown(tmp_path: Pa
         assert download["output_pages"] == expected_pages
 
     assert result["output_pages"] == expected_aggregate_pages + sum(expected_signature_pages)
+
+
+def test_custom_signature_list_mode_controls_signature_breakdown(tmp_path: Path) -> None:
+    options, _, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=6,
+        signature_mode="customsig",
+        custom_signature_config="1,2,1",
+        flyleafs=1,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="proportional",
+        output_mode="both",
+    )
+    assert error is None
+
+    result, impose_error = _impose_payload(
+        payload=_pdf_bytes(9),
+        source_name="custom-breakdown.pdf",
+        options=options,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
+    assert impose_error is None
+    assert result is not None
+
+    downloads = result["downloads"]
+    assert [entry["output_pages"] for entry in downloads] == [8, 2, 4, 2]
+
+
+def test_custom_signature_list_mode_rejects_sheet_count_mismatch(tmp_path: Path) -> None:
+    options, _, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=6,
+        signature_mode="customsig",
+        custom_signature_config="1,1",
+        flyleafs=1,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="proportional",
+        output_mode="aggregated",
+    )
+    assert error is None
+
+    result, impose_error = _impose_payload(
+        payload=_pdf_bytes(9),
+        source_name="custom-mismatch.pdf",
+        options=options,
+        artifact_dir=tmp_path,
+        artifact_retention_seconds=24 * 60 * 60,
+    )
+    assert result is None
+    assert impose_error is not None
+    assert "Invalid signature configuration" in impose_error
+    assert "document requires 4 sheets" in impose_error

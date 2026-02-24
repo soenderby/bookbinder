@@ -54,6 +54,76 @@ def test_parse_form_input_rejects_invalid_controls(
     assert form_values["output_mode"] == output_mode.strip().lower()
 
 
+def test_parse_form_input_rejects_invalid_signature_mode() -> None:
+    _, form_values, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=6,
+        signature_mode="legacy",
+        custom_signature_config="",
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="proportional",
+        positioning_mode="centered",
+        output_mode="aggregated",
+    )
+
+    assert error == "Invalid signature mode. Choose one of: standardsig, customsig."
+    assert form_values["signature_mode"] == "legacy"
+
+
+@pytest.mark.parametrize(
+    ("custom_signature_config", "expected_error"),
+    [
+        ("", "Custom signature list is required when signature mode is customsig (example: 10,10,8)."),
+        ("1,,2", "Custom signature list must be comma-separated positive integers (example: 10,10,8)."),
+        ("1,a,2", "Custom signature list must be comma-separated positive integers (example: 10,10,8)."),
+        ("1,0,2", "Custom signature list must contain only positive integers (sheets per signature)."),
+    ],
+)
+def test_parse_form_input_rejects_invalid_custom_signature_list(
+    custom_signature_config: str,
+    expected_error: str,
+) -> None:
+    _, _, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=6,
+        signature_mode="customsig",
+        custom_signature_config=custom_signature_config,
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="proportional",
+        positioning_mode="centered",
+        output_mode="aggregated",
+    )
+
+    assert error == expected_error
+
+
+def test_parse_form_input_accepts_custom_signature_list() -> None:
+    options, form_values, error = _parse_form_input(
+        paper_size="A4",
+        signature_length=6,
+        signature_mode="customsig",
+        custom_signature_config=" 1, 2, 1 ",
+        flyleafs=0,
+        duplex_rotate=False,
+        custom_width_mm="",
+        custom_height_mm="",
+        scaling_mode="proportional",
+        positioning_mode="centered",
+        output_mode="aggregated",
+    )
+
+    assert error is None
+    assert options.signature_mode == "customsig"
+    assert options.custom_signature_sheets == (1, 2, 1)
+    assert form_values["custom_signature_config"] == "1, 2, 1"
+
+
 @pytest.mark.parametrize(
     ("width_mm", "height_mm", "expected_error"),
     [
