@@ -45,7 +45,7 @@ In no particular order:
 
 Orca is a `tmux`-backed multi-agent loop with one persistent git worktree per agent:
 
-1. `setup-worktrees.sh` creates missing `worktrees/agent-N` on bootstrap branch `swarm/agent-N/bootstrap` and reuses existing worktrees as-is.
+1. `setup-worktrees.sh` creates missing `worktrees/agent-N` on branch `swarm/agent-N` and reuses existing worktrees as-is.
 2. `start.sh` launches one tmux session per agent, injects runtime env, and ensures the Dolt SQL server container is running for beads server mode.
 3. `agent-loop.sh` runs one agent pass per iteration, creates a unique per-run branch, writes per-run logs/metrics, and parses the agent summary JSON.
 4. `AGENT_PROMPT.md` defines the agent contract for issue lifecycle, merge, discovery, and summary output.
