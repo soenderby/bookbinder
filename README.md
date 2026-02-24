@@ -19,6 +19,14 @@ Run the required MVP checks:
 ./scripts/run-mvp-gates.sh
 ```
 
+Run the polished 300-page performance gate:
+
+```bash
+python scripts/benchmark_300_page_imposition.py --max-seconds 20 --runs 3 --warmup 1
+```
+
+Target and evidence details are tracked in `docs/polished-performance-target.md`.
+
 Packaging smoke coverage for editable installs with a top-level `generated/` directory runs in `tests/mvp_unit/test_packaging.py` as part of `pytest -m mvp_unit`.
 
 ## MVP Notes
