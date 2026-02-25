@@ -12,6 +12,17 @@ Orca intentionally keeps documentation to three markdown files in this directory
 2. `AGENT_PROMPT.md`: single consolidated instruction contract for loop agents
 3. `OPERATOR_GUIDE.md`: human operator guide, including intent and design principles
 
+## Prompt Migration Note
+
+`AGENT_PROMPT.md` remains the active worker prompt in this phase.
+
+Roadmap migration target:
+
+1. mandatory coordination protocol in `scripts/orca/AGENTS.md`
+2. optional operational guidance in `scripts/orca/knowledge/`
+
+M0 adds strict run-summary schema enforcement and metrics version attribution; it does not yet switch prompt files.
+
 ## Entrypoints
 
 - Preferred: `./bb orca <command> [args]`
@@ -128,7 +139,7 @@ Each iteration:
 1. creates run artifacts (`run.log`, `summary.json`, optional `summary.md`) under session/run directories
 2. renders `AGENT_PROMPT.md` placeholders (agent/worktree/summary/discovery/primary-repo/lock-helper paths)
 3. executes agent command once
-4. parses summary JSON when present
+4. parses summary JSON and validates required schema fields when present
 5. appends metrics row to `agent-logs/metrics.jsonl`
 6. continues until `MAX_RUNS` or agent requests stop via `loop_action=stop`
 
@@ -205,7 +216,7 @@ Tuning knobs:
 Orca handles transport/observability errors. Agents handle workflow policy.
 
 1. startup hard-stop failures: invalid config/env/worktree/prompt path, Dolt readiness timeout, or dirty non-running agent worktree
-2. run-level failures: non-zero agent exit, missing/invalid summary JSON, metrics append failure
+2. run-level failures: non-zero agent exit, missing/invalid summary JSON, summary schema validation failure, metrics append failure
 3. controlled stop: run limit reached or agent summary requests stop
 
 ## Logs and Traceability
@@ -233,6 +244,12 @@ Per-run final message capture:
 Metrics stream:
 
 `agent-logs/metrics.jsonl`
+
+Each metrics row includes:
+
+1. `harness_version` (`git describe --always --dirty` from the harness repo)
+2. `summary_schema_status` (`valid|invalid|not_checked`)
+3. `summary_schema_reason_codes` (array of deterministic validation codes when invalid)
 
 Per-agent discovery notes:
 

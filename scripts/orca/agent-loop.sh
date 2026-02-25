@@ -76,6 +76,14 @@ if [[ ! -x "${LOCK_HELPER_PATH}" ]]; then
   exit 1
 fi
 
+HARNESS_VERSION="$(git -C "${ROOT}" describe --always --dirty 2>/dev/null || true)"
+if [[ -z "${HARNESS_VERSION}" ]]; then
+  HARNESS_VERSION="$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || true)"
+fi
+if [[ -z "${HARNESS_VERSION}" ]]; then
+  HARNESS_VERSION="unknown"
+fi
+
 SESSION_DATE_PATH="$(date -u +%Y/%m/%d)"
 if [[ "${AGENT_SESSION_ID}" =~ ([0-9]{8})T[0-9]{6}Z ]]; then
   session_stamp="${BASH_REMATCH[1]}"
@@ -117,6 +125,8 @@ RUN_SUMMARY_ISSUE_STATUS=""
 RUN_SUMMARY_MERGED=""
 RUN_SUMMARY_DISCOVERY_COUNT=""
 RUN_SUMMARY_DISCOVERY_IDS=""
+RUN_SUMMARY_SCHEMA_STATUS="not_checked"
+RUN_SUMMARY_SCHEMA_REASON_CODES=""
 RUN_TOKENS_USED=""
 RUN_TOKENS_PARSE_STATUS="missing"
 RUN_BRANCH_NAME=""
@@ -163,6 +173,8 @@ start_run_artifacts() {
   RUN_SUMMARY_MERGED=""
   RUN_SUMMARY_DISCOVERY_COUNT=""
   RUN_SUMMARY_DISCOVERY_IDS=""
+  RUN_SUMMARY_SCHEMA_STATUS="not_checked"
+  RUN_SUMMARY_SCHEMA_REASON_CODES=""
   RUN_TOKENS_USED=""
   RUN_TOKENS_PARSE_STATUS="missing"
   RUN_BRANCH_NAME=""
@@ -175,6 +187,7 @@ start_run_artifacts() {
   log "discovery log path: ${DISCOVERY_LOG_FILE}"
   log "primary repo path: ${PRIMARY_REPO}"
   log "lock helper path: ${LOCK_HELPER_PATH}"
+  log "harness version: ${HARNESS_VERSION}"
 }
 
 select_run_base_ref() {
@@ -324,6 +337,8 @@ parse_summary_json_if_present() {
   RUN_SUMMARY_MERGED=""
   RUN_SUMMARY_DISCOVERY_COUNT=""
   RUN_SUMMARY_DISCOVERY_IDS=""
+  RUN_SUMMARY_SCHEMA_STATUS="not_checked"
+  RUN_SUMMARY_SCHEMA_REASON_CODES=""
 
   if [[ ! -s "${SUMMARY_JSON_FILE}" ]]; then
     return
@@ -362,21 +377,103 @@ parse_summary_json_if_present() {
     end
   ' "${SUMMARY_JSON_FILE}")"
 
+  validate_summary_json_schema
+  if [[ "${RUN_SUMMARY_SCHEMA_STATUS}" == "invalid" ]]; then
+    # Fail-closed: invalid summary schema cannot request loop stop.
+    RUN_SUMMARY_LOOP_ACTION="continue"
+    RUN_SUMMARY_LOOP_ACTION_REASON=""
+  fi
+
   log "parsed summary json: ${SUMMARY_JSON_FILE}"
 }
 
+validate_summary_json_schema() {
+  local schema_codes=""
+
+  RUN_SUMMARY_SCHEMA_STATUS="not_checked"
+  RUN_SUMMARY_SCHEMA_REASON_CODES=""
+
+  if [[ "${RUN_SUMMARY_PARSE_STATUS}" != "parsed" ]]; then
+    return
+  fi
+
+  schema_codes="$(jq -r '
+    def errs:
+      []
+      + (if has("issue_id") then [] else ["missing:issue_id"] end)
+      + (if (has("issue_id") and (.issue_id | type == "string")) then [] else (if has("issue_id") then ["type:issue_id"] else [] end) end)
+      + (if has("result") then [] else ["missing:result"] end)
+      + (if (has("result") and (.result | type == "string")) then [] else (if has("result") then ["type:result"] else [] end) end)
+      + (if (has("result") and (.result | type == "string") and ((.result == "completed") or (.result == "blocked") or (.result == "no_work") or (.result == "failed"))) then [] else (if has("result") then ["enum:result"] else [] end) end)
+      + (if has("issue_status") then [] else ["missing:issue_status"] end)
+      + (if (has("issue_status") and (.issue_status | type == "string")) then [] else (if has("issue_status") then ["type:issue_status"] else [] end) end)
+      + (if has("merged") then [] else ["missing:merged"] end)
+      + (if (has("merged") and (.merged | type == "boolean")) then [] else (if has("merged") then ["type:merged"] else [] end) end)
+      + (if has("discovery_ids") then [] else ["missing:discovery_ids"] end)
+      + (if (has("discovery_ids") and (.discovery_ids | type == "array")) then [] else (if has("discovery_ids") then ["type:discovery_ids"] else [] end) end)
+      + (if (has("discovery_ids") and (.discovery_ids | type == "array") and ([.discovery_ids[] | (type == "string")] | all)) then [] else (if has("discovery_ids") then ["type:discovery_ids_items"] else [] end) end)
+      + (if has("discovery_count") then [] else ["missing:discovery_count"] end)
+      + (if (has("discovery_count") and (.discovery_count | type == "number") and ((.discovery_count | floor) == .discovery_count)) then [] else (if has("discovery_count") then ["type:discovery_count"] else [] end) end)
+      + (if ((has("discovery_count") and has("discovery_ids") and (.discovery_count | type == "number") and ((.discovery_count | floor) == .discovery_count) and (.discovery_ids | type == "array")) | not) then [] else (if (.discovery_count == (.discovery_ids | length)) then [] else ["mismatch:discovery_count"] end) end)
+      + (if has("loop_action") then [] else ["missing:loop_action"] end)
+      + (if (has("loop_action") and (.loop_action | type == "string")) then [] else (if has("loop_action") then ["type:loop_action"] else [] end) end)
+      + (if (has("loop_action") and (.loop_action | type == "string") and ((.loop_action == "continue") or (.loop_action == "stop"))) then [] else (if has("loop_action") then ["enum:loop_action"] else [] end) end)
+      + (if has("loop_action_reason") then [] else ["missing:loop_action_reason"] end)
+      + (if (has("loop_action_reason") and (.loop_action_reason | type == "string")) then [] else (if has("loop_action_reason") then ["type:loop_action_reason"] else [] end) end)
+      + (if has("notes") then [] else ["missing:notes"] end)
+      + (if (has("notes") and (.notes | type == "string")) then [] else (if has("notes") then ["type:notes"] else [] end) end)
+      ;
+    (errs | unique) as $e
+    | if ($e | length) == 0 then "" else ($e | join(",")) end
+  ' "${SUMMARY_JSON_FILE}")"
+
+  if [[ -n "${schema_codes}" ]]; then
+    RUN_SUMMARY_SCHEMA_STATUS="invalid"
+    RUN_SUMMARY_SCHEMA_REASON_CODES="${schema_codes}"
+    log "summary schema invalid: ${schema_codes}"
+    return
+  fi
+
+  RUN_SUMMARY_SCHEMA_STATUS="valid"
+}
+
 determine_run_result() {
+  local first_schema_error=""
+
+  RUN_RESULT="failed"
+  RUN_REASON="agent-exit-${RUN_EXIT_CODE}"
+
+  if [[ "${RUN_SUMMARY_PARSE_STATUS}" == "missing" ]]; then
+    RUN_REASON="summary-missing"
+    return
+  fi
+
+  if [[ "${RUN_SUMMARY_PARSE_STATUS}" == "jq_unavailable" ]]; then
+    RUN_REASON="summary-jq-unavailable"
+    return
+  fi
+
+  if [[ "${RUN_SUMMARY_PARSE_STATUS}" == "invalid_json" ]]; then
+    RUN_REASON="summary-invalid-json"
+    return
+  fi
+
+  if [[ "${RUN_SUMMARY_SCHEMA_STATUS}" == "invalid" ]]; then
+    first_schema_error="${RUN_SUMMARY_SCHEMA_REASON_CODES%%,*}"
+    if [[ -n "${first_schema_error}" ]]; then
+      RUN_REASON="summary-schema-invalid:${first_schema_error}"
+    else
+      RUN_REASON="summary-schema-invalid"
+    fi
+    return
+  fi
+
   if [[ -n "${RUN_SUMMARY_RESULT}" ]]; then
     RUN_RESULT="${RUN_SUMMARY_RESULT}"
   elif [[ "${RUN_EXIT_CODE}" -eq 0 ]]; then
-    RUN_RESULT="success"
-  else
     RUN_RESULT="failed"
-  fi
-
-  RUN_REASON="agent-exit-${RUN_EXIT_CODE}"
-  if [[ "${RUN_SUMMARY_PARSE_STATUS}" == "invalid_json" ]]; then
-    RUN_REASON="summary-invalid-json"
+    RUN_REASON="summary-result-missing"
+    return
   fi
 
   if [[ "${RUN_SUMMARY_PARSE_STATUS}" == "parsed" && "${RUN_SUMMARY_LOOP_ACTION}" == "stop" ]]; then
@@ -408,6 +505,10 @@ write_run_summary_markdown() {
     echo "- Reason: ${RUN_REASON}"
     echo "- Summary JSON: ${SUMMARY_JSON_FILE}"
     echo "- Summary Parse Status: ${RUN_SUMMARY_PARSE_STATUS}"
+    echo "- Summary Schema Status: ${RUN_SUMMARY_SCHEMA_STATUS}"
+    if [[ -n "${RUN_SUMMARY_SCHEMA_REASON_CODES}" ]]; then
+      echo "- Summary Schema Reason Codes: ${RUN_SUMMARY_SCHEMA_REASON_CODES}"
+    fi
     echo "- Loop Action: ${RUN_SUMMARY_LOOP_ACTION}"
     if [[ -n "${RUN_SUMMARY_LOOP_ACTION_REASON}" ]]; then
       echo "- Loop Action Reason: ${RUN_SUMMARY_LOOP_ACTION_REASON}"
@@ -473,7 +574,10 @@ append_metrics_jsonl() {
     --arg summary_discovery_count "${RUN_SUMMARY_DISCOVERY_COUNT}" \
     --arg summary_discovery_ids_csv "${RUN_SUMMARY_DISCOVERY_IDS}" \
     --arg summary_parse_status "${RUN_SUMMARY_PARSE_STATUS}" \
+    --arg summary_schema_status "${RUN_SUMMARY_SCHEMA_STATUS}" \
+    --arg summary_schema_reason_codes_csv "${RUN_SUMMARY_SCHEMA_REASON_CODES}" \
     --arg tokens_parse_status "${RUN_TOKENS_PARSE_STATUS}" \
+    --arg harness_version "${HARNESS_VERSION}" \
     --arg run_log "${LOGFILE}" \
     --arg summary_json "${SUMMARY_JSON_FILE}" \
     --arg summary_markdown "${SUMMARY_FILE}" \
@@ -487,6 +591,7 @@ append_metrics_jsonl() {
       timestamp: $ts,
       agent_name: $agent,
       session_id: $session,
+      harness_version: $harness_version,
       run_number: $run_number,
       exit_code: $exit_code,
       result: $result,
@@ -498,6 +603,12 @@ append_metrics_jsonl() {
       tokens_used: $tokens_used,
       tokens_parse_status: $tokens_parse_status,
       summary_parse_status: $summary_parse_status,
+      summary_schema_status: $summary_schema_status,
+      summary_schema_reason_codes: (
+        if ($summary_schema_reason_codes_csv | length) == 0 then []
+        else ($summary_schema_reason_codes_csv | split(","))
+        end
+      ),
       summary: {
         result: (if ($summary_result | length) > 0 then $summary_result else null end),
         issue_status: (if ($summary_issue_status | length) > 0 then $summary_issue_status else null end),
@@ -573,6 +684,7 @@ log "session id: ${AGENT_SESSION_ID}"
 log "agent discovery log: ${DISCOVERY_LOG_FILE}"
 log "agent primary repo: ${PRIMARY_REPO}"
 log "agent lock helper: ${LOCK_HELPER_PATH}"
+log "harness version: ${HARNESS_VERSION}"
 if [[ "${MAX_RUNS}" -eq 0 ]]; then
   log "run mode: unbounded"
 else
