@@ -16,6 +16,8 @@ By the end of this roadmap, Orca should have:
 
 ## M0. Baseline + Prerequisites (Week 1)
 
+Status: Completed on February 25, 2026 (commit `0204648`).
+
 Goal: lock in observability and compatibility before behavior changes.
 
 Deliverables:
@@ -42,10 +44,10 @@ Primary files:
 
 Exit criteria:
 
-1. New runs write `harness_version`.
-2. Invalid summaries are marked with deterministic reason codes.
-3. `orca status` works on mixed old/new metrics rows.
-4. No regression in start/stop/status flow.
+1. Completed: new runs write `harness_version`.
+2. Completed: invalid summaries are marked with deterministic reason codes.
+3. Completed: `orca status` works on mixed old/new metrics rows.
+4. Completed: no regression in start/stop/status flow.
 
 ---
 
